@@ -1,0 +1,174 @@
+---
+title: "Ara Functional Units: Dispatcher, Sequencer, SLDU, MASKU"
+description: "Detailed description of Ara's dispatcher, sequencer, slide unit (SLDU), mask unit (MASKU), and their roles in RVV instruction execution and scheduling."
+---
+
+Beyond the parallel vector lanes, Ara contains several shared functional units that handle instruction decoding, scheduling, cross-lane data movement, and predication. These components — the dispatcher, sequencer, slide unit, and mask unit — operate across all lanes and are essential to correct, high-performance RVV execution. Together with the per-lane units, they form the complete Ara execution engine defined by the `NrPEs = NrLanes + 4` processing elements (lanes + VLDU + VSTU + SLDU + MASKU) that the sequencer manages.
+
+---
+
+## Dispatcher (`ara_dispatcher`)
+
+**Source:** `hardware/src/ara_dispatcher.sv`
+
+The `ara_dispatcher` module is Ara's front-end bridge between CVA6 and the vector backend. It is responsible for everything that happens between receiving a raw accelerator request from CVA6 and issuing a fully-formed `ara_req_t` descriptor to the sequencer.
+
+**Key responsibilities:**
+
+- **Full RVV instruction decode** — Translates every incoming `accelerator_req_t` from CVA6 into a detailed `ara_req_t` struct. This includes determining the operation (`ara_op_e`), source register numbers (`vs1`, `vs2`, `vd`), which sources are actually used (`use_vs1`, `use_vs2`, `use_vd_op`), effective element widths (`eew_vs1`, `eew_vs2`, `eew_vd_op`), and operand queue conversion modes (`conversion_vs1`, `conversion_vs2`).
+
+- **Vector CSR management** — Maintains the five vector CSRs in flip-flop state: `csr_vstart_q`, `csr_vl_q`, `csr_vtype_q`, `csr_vxsat_q`, and `csr_vxrm_q`. Updates them on `vsetvl`/`vsetvli`/`vsetivli` instructions and propagates `vl`, `vtype`, and `vstart` into every `ara_req_t`. The `vtype_t` ↔ XLEN-bit CSR conversion is handled by the internal `xlen_vtype()` and `vtype_xlen()` functions.
+
+- **Register group legality checking** — Validates that source and destination register groups (determined by `emul`) are correctly aligned and do not violate RVV overlap rules. Issues an illegal instruction response to CVA6 for violations.
+
+- **EEW mismatch reshuffling** — When a source register's current EEW differs from the instruction's target EEW (e.g., a widening multiply feeds its result to a narrowing operation), the dispatcher injects synthetic reshuffle slide micro-operations to re-layout the register contents before issuing the primary instruction.
+
+- **Segment memory micro-op injection** — For segmented memory operations (when `SegSupport = SegSupportEnable`), the dispatcher works with the `segment_sequencer` to break down segment operations into sequences of scalar sub-operations.
+
+- **Instruction tracking** — Monitors active instruction completion via the `load_complete_i`, `store_complete_i`, and `ara_resp_valid_i` signals, and forwards scalar results and exceptions back to CVA6 via `acc_resp_o`.
+
+- **Fixed-point rounding mode distribution** — Broadcasts `alu_vxrm_o[NrLanes-1:0]` to all lanes so every lane's fixed-point unit uses the current `vxrm` setting. Collects `vxsat_flag_i[NrLanes-1:0]` from all lanes and ORs them into `csr_vxsat_q`.
+
+- **Store-pending tracking** — Drives `core_st_pending_o` from `acc_req_i.store_pending` so the VLSU knows when CVA6 has a pending scalar store that must be ordered relative to vector stores.
+
+**Ports (key):**
+
+| Port | Direction | Description |
+|------|-----------|-------------|
+| `acc_req_i` | In | Raw accelerator request from CVA6 |
+| `acc_resp_o` | Out | Scalar result / exception response to CVA6 |
+| `ara_req_o` | Out | Decoded vector instruction descriptor |
+| `ara_req_valid_o` | Out | Handshake valid to sequencer |
+| `ara_req_ready_i` | In | Handshake ready from sequencer |
+| `fflags_ex_i[NrLanes-1:0][4:0]` | In | FP exception flags from each lane |
+| `vxsat_flag_i[NrLanes-1:0]` | In | Fixed-point saturation flags from each lane |
+| `alu_vxrm_o[NrLanes-1:0]` | Out | Fixed-point rounding mode to each lane |
+| `lsu_ex_flush_o` | Out | Initiates pipeline flush after store exception |
+
+---
+
+## Sequencer (`ara_sequencer`)
+
+**Source:** `hardware/src/ara_sequencer.sv`
+
+The `ara_sequencer` is Ara's central scheduler. It manages the lifecycle of every in-flight vector instruction, from acceptance through execution to completion, across all `NrPEs = NrLanes + 4` processing elements.
+
+**Key responsibilities:**
+
+- **Instruction window management** — Tracks up to `NrVInsn = 8` in-flight instructions using a bitmask (`vinsn_running_q`). A leading-zero counter (`lzc`) finds the next free slot and assigns a `vid_t` token. When all 8 slots are occupied (`vinsn_running_full`), the sequencer asserts backpressure to the dispatcher (`ara_req_ready_o` = 0).
+
+- **Dependency tracking via scoreboard** — Maintains a `pe_vinsn_running_q[NrPEs-1:0][NrVInsn-1:0]` matrix that records which instructions are running on which PE. From this, it computes the `global_hazard_table_o[NrVInsn-1:0][NrVInsn-1:0]` broadcast to all operand requesters, enabling each lane to determine whether a needed source register is still being written.
+
+- **Broadcast to processing elements** — Issues a single `pe_req_t` valid to all PEs in parallel (`pe_req_valid_o`). Each PE independently decides whether the instruction targets it. Lanes signal readiness via `pe_req_ready_i[NrPEs-1:0]`.
+
+- **Completion tracking** — Monitors `pe_resp_i[NrPEs-1:0]` from each PE. ALU and MFPU completion within lanes is also tracked via the dedicated `alu_vinsn_done_i` and `mfpu_vinsn_done_i` fast-path signals. An instruction slot is freed only when all PEs that ran it have acknowledged completion.
+
+- **Scalar result collection** — The slide unit is the only PE that can return a scalar value (e.g., from a reduction that passes through the SLDU). The sequencer receives this via `pe_scalar_resp_i` / `pe_scalar_resp_valid_i` / `pe_scalar_resp_ready_o` and forwards it to the dispatcher.
+
+- **Exception tracking** — Receives address-translation exceptions and fault-only-first exception flags from the address generation unit (`addrgen_ack_i`, `addrgen_exception_i`, `addrgen_exception_vstart_i`, `addrgen_fof_exception_i`) and mid-burst store exceptions (`lsu_current_burst_exception_i`), then forwards them upstream via `ara_resp_o`.
+
+- **Idle signaling** — Drives `ara_idle_o` = 1 when `vinsn_running_q` is all-zero, allowing the dispatcher to confirm that no instruction is in flight (used during `vsetvl` processing and flush sequences).
+
+- **Lane desynchronization stall** — The `stall_lanes_desynch` signal prevents new instructions from being issued when a lane-level stall would cause different lanes to be at different positions in the same instruction, which would corrupt VRF state.
+
+---
+
+## Slide Unit (SLDU)
+
+**Source:** `hardware/src/sldu/sldu.sv`  
+**Supporting files:** `sldu/p2_stride_gen.sv`, `sldu/sldu_op_dp.sv`
+
+The `sldu` module is responsible for all cross-lane data movement operations in Ara. It reads operands from every lane in parallel and writes results back to every lane in parallel, making it the only unit besides the VLSU that has true all-to-all lane connectivity.
+
+**Supported operations:**
+
+| Instruction | Description |
+|-------------|-------------|
+| `vslideup` | Slides vector elements up by a scalar offset |
+| `vslidedown` | Slides vector elements down by a scalar offset |
+| `vslide1up` | Slides up by one element, inserting a scalar at element 0 |
+| `vslide1down` | Slides down by one element, inserting a scalar at the last position |
+| `vfslide1up` | FP variant of `vslide1up` |
+| `vfslide1down` | FP variant of `vslide1down` |
+| `vrgather` / `vrgatherei16` | Indexed gather from source vector |
+| `vcompress` | Compresses active (masked) elements to the front of the destination |
+
+**Architecture details:**
+
+- The SLDU maintains an instruction queue of depth `SlduInsnQueueDepth = 2` slots (defined in `ara_pkg.sv`), allowing one instruction to be committed while the next is being accepted.
+- `p2_stride_gen.sv` generates the byte offset for power-of-two strides — the common case in slides — enabling single-cycle address computation without a general multiplier.
+- `sldu_op_dp.sv` is the slide datapath: it performs the actual byte-level reshuffling across the `NrLanes × 64`-bit input bus.
+- The SLDU also serves as the final stage for ALU and MFPU reductions: the sequencer's `sldu_mux_sel_o` output (`sldu_mux_e`: `NO_RED`, `ALU_RED`, `MFPU_RED`) controls a mux that routes lane reduction partial results through the slide datapath to accumulate them into a scalar.
+- Mask predication is accepted from the MASKU via `mask_i[NrLanes-1:0]` / `mask_valid_i` / `mask_ready_o`.
+
+**Key ports:**
+
+| Port | Direction | Description |
+|------|-----------|-------------|
+| `sldu_operand_i[NrLanes-1:0]` | In | 64-bit source operands from each lane |
+| `sldu_result_wdata_o[NrLanes-1:0]` | Out | 64-bit result words written to each lane's VRF |
+| `sldu_mux_sel_o` | Out | Reduction mux select to lanes (`sldu_mux_e`) |
+| `sldu_red_valid_o[NrLanes-1:0]` | Out | Reduction result valid to each lane |
+
+---
+
+## Mask Unit (MASKU)
+
+**Source:** `hardware/src/masku/masku.sv`  
+**Supporting file:** `masku/masku_operands.sv`
+
+The `masku` module provides centralized predication and bit-level operation support for all of Ara's functional units. Rather than replicating mask logic in every lane, Ara uses a single shared MASKU that collects mask operands from all lanes, processes them, and distributes byte-level predication strobes back to every lane and to the VLSU and SLDU.
+
+**Supported operations:**
+
+| Category | Instructions |
+|----------|-------------|
+| Mask logical | `vmand`, `vmnand`, `vmandnot`, `vmor`, `vmnor`, `vmornot`, `vmxor`, `vmxnor` |
+| Mask-to-scalar | `vcpop.m` (population count), `vfirst.m` (first active element index) |
+| Mask-to-mask | `vmsbf` (set-before-first), `vmsof` (set-only-first), `vmsif` (set-including-first) |
+| Mask-to-vector | `viota` (iota/prefix-sum of mask), `vid` (element index vector) |
+| Permutations | `vrgather`, `vrgatherei16` (in cooperation with the SLDU) |
+
+**Architecture details:**
+
+- `masku_operands.sv` handles all operand collection: it reads `NrMaskFUnits+2` operand buses per lane (`masku_operand_i[NrLanes-1:0][NrMaskFUnits+2-1:0]`), giving the MASKU access to operands from the ALU, MFPU, and additional functional unit types simultaneously.
+- The MASKU tracks four independent element counters: `read_cnt_q` (operand reads), `issue_cnt_q` (operation issues), `processing_cnt_q` (result validation), and `commit_cnt_q` (VRF writeback), enabling full pipelining of consecutive mask instructions.
+- Mask bits are distributed back to lanes as byte-strobe masks (`mask_o[NrLanes-1:0]`, type `strb_t`) together with `mask_valid_o[NrLanes-1:0]`. The VLSU and SLDU each have a dedicated ready signal (`vldu_mask_ready_i`, `vstu_mask_ready_i`, `sldu_mask_ready_i`) for backpressure.
+- Scalar results from `vcpop.m` and `vfirst.m` are returned via `result_scalar_o` / `result_scalar_valid_o`, which connect to the sequencer's `pe_scalar_resp_i` path and ultimately to CVA6.
+- `vrgather` support: the MASKU drives `masku_vrgat_req_valid_o[NrLanes-1:0]` and `masku_vrgat_req_o` (type `vrgat_req_t`) to request gather operands directly from lane VRFs, bypassing the normal operand queue path.
+- Instruction queue depth: `MaskuInsnQueueDepth = 1` — the MASKU handles one instruction at a time.
+
+---
+
+## Segment Sequencer (`segment_sequencer`)
+
+**Source:** `hardware/src/segment_sequencer.sv`
+
+The `segment_sequencer` breaks down RVV segmented memory operations (e.g., `vlseg2e32.v`, `vsseg4e64.v`) into sequences of scalar sub-operations that Ara's VLSU can handle individually. It sits between the dispatcher and the sequencer in the `ara_req_t` path and is activated only when `is_segment_mem_op_i` is asserted.
+
+When `SegSupport = SegSupportEnable`, the segment sequencer:
+
+1. Accepts a single segment load/store `ara_req_t` with `nf > 0` (number of fields, 2–8).
+2. Iterates through each field, modifying `vstart` to point to successive segments and re-issuing an `ara_req_o` for each field.
+3. Monitors `load_complete_i` / `store_complete_i` to sequence operations correctly.
+4. Asserts `seg_mem_op_end_o` when all fields have completed.
+
+When `SegSupport = SegSupportDisable`, the module is compiled away and all signals pass through directly.
+
+---
+
+## First-Pass Decoder (`cva6_accel_first_pass_decoder`)
+
+**Source:** `hardware/src/cva6_accel_first_pass_decoder.sv`
+
+The `cva6_accel_first_pass_decoder` is a purely combinational module instantiated inside the CVA6 front-end pipeline. It inspects each 32-bit instruction word and determines:
+
+- Whether the instruction is a vector instruction (`is_accel_o`).
+- Which scalar integer registers (`rs1`, `rs2`, `rd`) and floating-point registers (`fs1`, `fs2`, `fd`) the instruction reads or writes, so CVA6's scoreboard can track data hazards between scalar and vector operations.
+- Whether the instruction is illegal (`illegal_instr_o`).
+
+This early classification prevents CVA6 from stalling unnecessarily on vector instructions that only use scalar registers as configuration inputs (e.g., `vsetvl rd, rs1, rs2`).
+
+<Info>
+**Ideal dispatcher mode** — The `accel_dispatcher_ideal.sv` module provides an alternative to the full CVA6 front-end for performance profiling and simulation. When compiled with the `IDEAL_DISPATCHER` macro, `ara_system` replaces the CVA6 instance with `accel_dispatcher_ideal`, which reads pre-encoded vector instruction traces from an external file and issues them directly to Ara without any scalar pipeline overhead. This mode is useful for measuring Ara's raw vector throughput independent of CVA6's fetch and decode latency.
+</Info>

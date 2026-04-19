@@ -1,0 +1,145 @@
+---
+title: "Ara Dependencies: Hardware IPs, Toolchain, and Tools"
+description: "Complete list of hardware IP dependencies (axi, CVA6, common_cells), software toolchain requirements, and system packages needed to build and simulate Ara."
+---
+
+Ara depends on a set of external hardware IP blocks, software toolchains, and host system packages. This page lists all dependencies, their sources, licenses, and the commands used to fetch or build them.
+
+## Hardware IP dependencies
+
+Ara's RTL design depends on the following hardware IP libraries. All of them are managed by [Bender](https://github.com/pulp-platform/bender) and checked out into the `hardware/` build environment.
+
+| IP | Repository | License |
+|----|------------|---------|
+| `axi` | [pulp-platform/axi](https://github.com/pulp-platform/axi) | Solderpad 0.51 |
+| `common_cells` | [pulp-platform/common_cells](https://github.com/pulp-platform/common_cells) | Solderpad 0.51 |
+| `common_verification` | [pulp-platform/common_verification](https://github.com/pulp-platform/common_verification) | Solderpad 0.51 |
+| `cva6` | [openhwgroup/cva6](https://github.com/openhwgroup/cva6) | Solderpad 0.51 |
+| `tech_cells_generic` | [pulp-platform/tech_cells_generic](https://github.com/pulp-platform/tech_cells_generic) | Solderpad 0.51 |
+
+<Note>
+  Hardware IP dependencies are managed with **Bender**, a package manager for hardware designs. Bender reads the `Bender.yml` manifest in the `hardware/` directory and resolves all transitive dependencies. The locked versions are recorded in `Bender.lock` for reproducibility. Do not use `Bender.local` overrides — use `Bender.lock` instead.
+</Note>
+
+## Software toolchain
+
+### RISC-V LLVM toolchain
+
+Ara requires an LLVM/Clang toolchain with support for the RISC-V Vector Extension v1.0. The toolchain is included as a Git submodule at `toolchain/riscv-llvm` and is built in-tree.
+
+```bash
+make toolchain-llvm
+```
+
+The build invokes CMake with Ninja, targeting `riscv64-unknown-elf`, and installs to `install/riscv-llvm/`. The build also compiles the newlib C runtime (`toolchain/newlib`) and the RISC-V compiler-rt runtime library as additional toolchain components.
+
+### Spike ISA simulator
+
+The [Spike RISC-V ISA simulator](https://github.com/riscv-software-src/riscv-isa-sim) is included as a Git submodule at `toolchain/riscv-isa-sim`. The bundled version is **patched** to align the behaviour of the `vcsr` CSR with the toolchain and with RVV 1.0 semantics.
+
+```bash
+make riscv-isa-sim
+```
+
+The simulator is installed to `install/riscv-isa-sim/`.
+
+<Warning>
+  Building Spike with newer versions of GCC/G++ (above approximately 7.2.0) may produce dynamic linking errors against `libstdc++`. If you encounter such errors, build Spike with a statically linked C++ runtime:
+
+  ```bash
+  make riscv-isa-sim LDFLAGS="-static-libstdc++"
+  ```
+
+  Spike has been verified to build successfully with **gcc/g++ 7.2.0**.
+</Warning>
+
+### Verilator
+
+Ara's RTL simulation flow uses Verilator v4.106, included as a Git submodule at `toolchain/verilator`. Verilator is licensed under the **GPL v3.0**.
+
+```bash
+make verilator
+```
+
+The Verilator binary is installed to `install/verilator/bin/`. A modern Verilator installation from the system package manager is typically incompatible with Ara's RTL; always use the bundled version.
+
+Verilator simulations also rely on testbench helper files adapted from lowRISC, located in `hardware/tb/verilator/`. These are licensed under the **Apache License v2.0**.
+
+## System packages
+
+The toolchain and simulator builds require the following host packages. Package names are for Debian/Ubuntu; adapt for other distributions as needed.
+
+### Toolchains (GCC and LLVM)
+
+```bash
+sudo apt-get install libmpc-dev ninja-build
+```
+
+| Package | Purpose |
+|---------|---------|
+| `libmpc-dev` | Multi-precision complex arithmetic library, required by GCC build |
+| `ninja-build` | Ninja build system, required by the LLVM/CMake build |
+
+### Verilator
+
+```bash
+sudo apt-get install libelf-dev help2man zlibc zlib1g zlib1g-dev \
+  libfl-dev libfl2 flex linux-headers-$(uname -r)
+```
+
+| Package | Purpose |
+|---------|---------|
+| `libelf-dev` | ELF parsing library, required by Verilator's binary loading |
+| `help2man` | Man page generation tool, required by the Verilator build |
+| `linux-headers-$(uname -r)` | Kernel headers, required on some distributions |
+| `zlibc`, `zlib1g`, `zlib1g-dev` | Compression library and development headers |
+| `libfl-dev`, `libfl2` | Flex runtime libraries |
+| `flex` | Fast lexical analyser, required by Verilator's parser |
+
+<Note>
+  The package list above is non-exhaustive. Some packages may already be installed on your system. If a build step fails with a missing library error, install the corresponding development package and retry.
+</Note>
+
+## Managing Git submodules
+
+Toolchain submodules (`riscv-gnu-toolchain`, `newlib`, `riscv-llvm`) are large and are not checked out automatically with `git clone --recursive`. Use the dedicated Makefile target to fetch them:
+
+```bash
+make git-submodules
+```
+
+This runs:
+
+```bash
+git submodule update --init --recursive
+git submodule update --init --recursive --checkout -- toolchain/riscv-gnu-toolchain
+git submodule update --init --recursive --checkout -- toolchain/newlib
+git submodule update --init --recursive --checkout -- toolchain/riscv-llvm
+```
+
+If the remote URL of any submodule changes, synchronise the pointer before updating:
+
+```bash
+git submodule sync --recursive
+```
+
+## Hardware IP management with Bender
+
+Hardware IP dependencies are checked out separately from the Git submodules. From the `hardware/` directory, run:
+
+```bash
+cd hardware
+make checkout
+```
+
+This installs the Bender binary (version 0.31.0) and checks out all hardware IPs listed in `Bender.yml` at the versions pinned in `Bender.lock`.
+
+After the initial checkout, apply the Verilator compatibility patches once:
+
+```bash
+make apply-patches
+```
+
+<Note>
+  The patch step must be repeated only if the hardware IPs are deleted and re-fetched via `make checkout`. If you are only updating RTL or application code, you do not need to re-apply patches.
+</Note>

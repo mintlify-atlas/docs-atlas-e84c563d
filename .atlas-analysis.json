@@ -1,24 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "Ara Vector Processor",
+  "projectType": "general",
+  "projectName": "Ara Vector Processor",
+  "projectDescription": "Ara is an open-source, scalable 64-bit RISC-V Vector (RVV 1.0) processing unit that operates as a coprocessor to the CVA6 scalar core, supporting configurable lane counts for data-parallel workloads.",
   "theme": "aspen",
-  "colors": {
-    "primary": "#2E86AB",
-    "light": "#5BA4CF",
-    "dark": "#1A5276"
-  },
-  "favicon": "/favicon.svg",
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/pulp-platform/ara"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/pulp-platform/ara"
-    }
-  },
+  "primaryColor": "#2E86AB",
+  "lightColor": "#5BA4CF",
+  "darkColor": "#1A5276",
   "navigation": {
     "tabs": [
       {
@@ -93,5 +80,32 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "RISC-V Vector Extension 1.0 (RVV) compliant",
+    "Scalable lane count: 2, 4, 8, or 16 parallel vector lanes",
+    "64-bit element width (ELEN=64) with SIMD support for 8/16/32/64-bit data",
+    "Multi-precision floating-point: FP16, FP32, FP64",
+    "Fixed-point arithmetic support",
+    "Segmented memory operations",
+    "AXI4-compatible memory interface",
+    "Integration with CVA6 RISC-V scalar core",
+    "FPGA prototyping support (VCU128, VCU118) with Linux boot",
+    "Verilator and ModelSim RTL simulation flows",
+    "Ideal Dispatcher mode for isolated vector performance evaluation",
+    "Published in IEEE TVLSI 2020 and IEEE TC 2024"
+  ],
+  "publicApiSurface": [
+    "ara module: NrLanes, VLEN, FPUSupport, FixPtSupport, SegSupport, OSSupport parameters",
+    "ara_system module: top-level SoC integration with CVA6 + Ara",
+    "ara_soc module: full SoC wrapper with AXI interconnect",
+    "acc_req_i / acc_resp_o: accelerator interface ports to CVA6",
+    "axi_req_o / axi_resp_i: AXI memory interface ports",
+    "fpu_support_e: FPUSupportNone/Half/Single/HalfSingle/Double/SingleDouble/HalfSingleDouble/All",
+    "fixpt_support_e: FixedPointEnable/FixedPointDisable",
+    "seg_support_e: SegSupportEnable/SegSupportDisable",
+    "fpext_support_e: FPExtSupportEnable/FPExtSupportDisable",
+    "Makefile targets: toolchain-llvm, riscv-isa-sim, verilator, sim, simv, simv-riscv_tests",
+    "config/ configurations: 2_lanes.mk, 4_lanes.mk, 8_lanes.mk, 16_lanes.mk"
+  ]
 }

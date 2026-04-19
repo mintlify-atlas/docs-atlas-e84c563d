@@ -1,0 +1,68 @@
+---
+title: "VLSU Module Reference: Vector Load/Store Unit"
+description: "VLSU module reference: AXI4 memory transactions, address generation, CVA6 MMU integration, exception handling, and all supported vector access patterns."
+---
+
+The VLSU handles all vector memory operations in Ara. It issues AXI4 AR and AW transactions to the memory subsystem, manages the full data flow between memory and the per-lane vector register file slices, integrates with CVA6's MMU for virtual address translation, and propagates memory exceptions back through the sequencer to CVA6.
+
+## VLSU submodules
+
+| File | Description |
+|------|-------------|
+| `vlsu.sv` | Top-level wrapper. Instantiates `axi_cut`, `addrgen`, `vldu`, and `vstu`. Aggregates exceptions and routes the AXI interface. |
+| `addrgen.sv` | Address generation unit. Computes AXI AR/AW addresses for all access patterns. Handles MMU translation requests and drives AR/AW channels directly. |
+| `vldu.sv` | Vector Load Unit. Receives AXI R-channel beats, shuffles data into per-lane VRF format, applies masks, and writes results into each lane's VRF slice. |
+| `vstu.sv` | Vector Store Unit. Collects per-lane operands, converts them to AXI word-aligned format with byte strobes, drives AXI W beats, and processes AXI B responses. |
+
+## Supported access patterns
+
+| Pattern | Description |
+|---------|-------------|
+| Unit-strided | Contiguous element access (`VLE`, `VSE`). Uses AXI burst transactions for maximum bus utilization. Each burst is constrained to a single 4 KiB page to simplify MMU translation. |
+| Strided | Fixed non-unit stride (`VLSE`, `VSSE`). Issues one AXI transaction per element; typically under-utilizes the bus. |
+| Indexed (unordered) | Per-element address from a source vector register (`VLXE`, `VSXE`). One AXI transaction per element. Stalls address generation until the index operand has been deshuffled. |
+| Indexed (ordered) | Same as indexed but preserves element order for exception semantics. |
+| Fault-only-first | Unit-strided load variant. Raises an exception only on the first element if a fault occurs; remaining elements are loaded up to the fault boundary. Requires `OSSupport = 1`. |
+| Segment | Structured loads/stores of `NF` contiguous fields per element. Injected as a sequence of micro-ops by `ara_dispatcher` when `SegSupport = SegSupportEnable`. |
+| Whole-register | Loads or stores an entire vector register without EEW/LMUL interpretation. |
+
+## AXI interface
+
+The VLSU drives a wide AXI4 bus whose data width equals `AxiDataWidth` (typically `64 × NrLanes / 2` bits or wider, configured at the top level). An `axi_cut` instance is placed between the VLSU internal logic and the external AXI port to decouple timing.
+
+| Channel | Direction | Description |
+|---------|-----------|-------------|
+| AR | Output | Read address channel. Driven by `addrgen` for load operations. |
+| AW | Output | Write address channel. Driven by `addrgen` for store operations. |
+| R | Input | Read data channel. Consumed by `vldu` beat-by-beat. |
+| W | Output | Write data channel. Driven by `vstu` with per-byte strobes. |
+| B | Input | Write response channel. Consumed by `vstu` to track store completion. |
+
+## MMU integration
+
+When `OSSupport = 1`, the VLSU sends virtual addresses to CVA6's MMU via the `acc_mmu_req_t` / `acc_mmu_resp_t` interface and receives physical addresses in return before issuing AXI transactions.
+
+Address translation is managed inside `addrgen`:
+
+- For unit-strided accesses, each AXI burst is bounded to a single 4 KiB page, so one translation covers the entire burst.
+- For strided and indexed accesses, each element may require an individual translation.
+- The `addrgen` FSM enters `WAIT_LAST_TRANSLATION` or `WAIT_TRANSLATION` states while awaiting MMU responses.
+- Fault-only-first semantics (`addrgen_fof_exception_i`) are only available with `OSSupport = 1`.
+
+## Exception handling
+
+The VLSU detects and propagates three categories of memory exception:
+
+1. **Address generation faults** — Misaligned accesses and page faults detected by `addrgen`. Reported via `addrgen_exception_o` with a precise `vstart` value (`addrgen_exception_vstart_i`) indicating how many elements completed before the fault.
+2. **Load burst exceptions** — Detected by `vldu` mid-burst. Partially buffered result queue entries are committed to the VRF before the exception is signalled, ensuring the register file is consistent.
+3. **Store burst exceptions** — Detected by `vstu` from AXI B-channel error responses or MMU faults. The store unit flushes pending operands and signals `stu_current_burst_exception_o`.
+
+The sequencer aggregates these signals and returns the exception to CVA6 via `acc_resp_o` with the correct `vstart` so that the instruction can be replayed or handled by the OS.
+
+## Address generation
+
+For strided and indexed accesses, address computation is managed entirely within `addrgen`:
+
+- **Strided** — The base address and stride value are taken from the `pe_req_i` fields. One AXI transaction is issued per element.
+- **Indexed** — Element addresses are read from a source vector register. The `addrgen` module receives the index operand via `addrgen_operand_i` from the lane operand queues. The operand is deshuffled before use to account for Ara's lane-interleaved byte layout.
+- **AXI4 compliance** — All burst requests generated by `addrgen` respect the 4 KiB page boundary rule and the 256-beat maximum burst length.

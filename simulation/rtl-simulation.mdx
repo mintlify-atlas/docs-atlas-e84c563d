@@ -1,0 +1,128 @@
+---
+title: "RTL Simulation with ModelSim and Verilator"
+description: "Run Ara RTL simulations using ModelSim or Verilator. Learn how to compile the hardware, load binaries, generate waveform traces, and run RISC-V unit tests."
+---
+
+Ara's RTL can be simulated with either ModelSim (QuestaSim) or Verilator. Both flows share the same hardware checkout and patching steps; the main difference is the simulator backend you invoke.
+
+## Prerequisites
+
+Before running any simulation, install Bender and fetch all hardware IP dependencies. This is a one-time step.
+
+```bash
+cd hardware
+make checkout
+make apply-patches
+```
+
+<Note>
+The `apply-patches` step is required only once. You need to repeat it only if the hardware dependencies under `hardware/deps/` are deleted and checked out from scratch.
+</Note>
+
+## ModelSim simulation
+
+<Steps>
+  <Step title="Compile the hardware">
+    Compile all SystemVerilog sources into the ModelSim library:
+
+    ```bash
+    make compile
+    ```
+  </Step>
+  <Step title="Run with GUI">
+    Launch the simulation with the ModelSim graphical interface. The `app` variable resolves to the binary at `apps/bin/<app>`:
+
+    ```bash
+    app=hello_world make sim
+    ```
+  </Step>
+  <Step title="Run without GUI (batch mode)">
+    Run headlessly—useful for CI or scripted flows:
+
+    ```bash
+    app=hello_world make simc
+    ```
+  </Step>
+  <Step title="Run an arbitrary binary">
+    Use `preload` to specify a full path to any ELF binary:
+
+    ```bash
+    preload=/path/to/binary make sim
+    ```
+  </Step>
+</Steps>
+
+## Verilator simulation
+
+<Steps>
+  <Step title="Verilate the design">
+    Compile the SystemVerilog sources to C++ and build the Verilator model:
+
+    ```bash
+    make verilate
+    ```
+  </Step>
+  <Step title="Run a simulation">
+    Execute the Verilator model with your application:
+
+    ```bash
+    app=hello_world make simv
+    ```
+
+    To run an arbitrary binary, use `preload` instead:
+
+    ```bash
+    preload=/path/to/binary make simv
+    ```
+  </Step>
+</Steps>
+
+## Waveform traces
+
+Add `trace=1` to the `verilate` and `simv` commands to capture waveforms in the FST format:
+
+```bash
+trace=1 make verilate
+trace=1 app=hello_world make simv
+```
+
+Open the resulting `.fst` file with [GTKWave](http://gtkwave.sourceforge.net/):
+
+```bash
+gtkwave <trace_file>.fst
+```
+
+## Running RISC-V unit tests
+
+The `apps` folder includes RISC-V ISA unit tests for the vector extension. After verilating the design, run all tests with:
+
+```bash
+make riscv_tests_simv
+```
+
+You can also use the top-level shortcut, which compiles the tests and runs the simulation in one step:
+
+```bash
+make riscv_tests
+```
+
+## VCD dumping for power analysis
+
+Activity-based power analysis requires VCD files. Pass `vcd_dump=1` when compiling the application and when running the simulation:
+
+```bash
+make -C apps bin/${program} vcd_dump=1
+make -C hardware simc app=${program} vcd_dump=1
+```
+
+The following kernels currently support automatic VCD dumping:
+
+- `fmatmul`
+- `fconv3d`
+- `fft`
+- `dwt`
+- `exp`
+- `cos`
+- `log`
+- `dropout`
+- `jacobi2d`

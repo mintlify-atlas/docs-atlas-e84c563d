@@ -1,0 +1,76 @@
+---
+title: "ara Module: Ara Top-Level Vector Unit Reference"
+description: "SystemVerilog module reference for the Ara top-level vector unit: parameters, ports, internal structure, and integration notes for the ara module."
+---
+
+`ara` is the top-level vector processing unit, implementing the RISC-V Vector 1.0 Extension (RVV). It interfaces directly with CVA6 via the accelerator interface and contains all vector-specific sub-units required to execute RVV instructions.
+
+## Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `NrLanes` | `int unsigned` | — | Number of parallel vector lanes. Most stable with powers of two from 2 to 16. |
+| `VLEN` | `int unsigned` | — | Total vector length in bits. Typically derived from 1024 bits per lane. |
+| `OSSupport` | `int unsigned` | `1` | Enables MMU integration, virtual address translation, and fault-only-first logic. |
+| `FPUSupport` | `fpu_support_e` | `FPUSupportHalfSingleDouble` | Enables floating-point support. Options: `FPUSupportNone`, `FPUSupportHalf`, `FPUSupportSingle`, `FPUSupportHalfSingle`, `FPUSupportDouble`, `FPUSupportSingleDouble`, `FPUSupportHalfSingleDouble`, `FPUSupportAll`. |
+| `FPExtSupport` | `fpext_support_e` | `FPExtSupportEnable` | Enables external FPU support for `vfrec7` and `vfrsqrt7`. |
+| `FixPtSupport` | `fixpt_support_e` | `FixedPointEnable` | Enables fixed-point instruction support. |
+| `SegSupport` | `seg_support_e` | `SegSupportEnable` | Enables segmented memory operations. |
+| `CVA6Cfg` | `config_pkg::cva6_cfg_t` | `cva6_config_pkg::cva6_cfg` | CVA6 configuration record; propagated to sub-modules. |
+| `AxiDataWidth` | `int unsigned` | — | AXI data bus width in bits. Typically `64 * NrLanes / 2` or wider. |
+| `AxiAddrWidth` | `int unsigned` | — | AXI address bus width in bits. |
+| `axi_ar_t` | type | `logic` | AXI AR channel type. |
+| `axi_r_t` | type | `logic` | AXI R channel type. |
+| `axi_aw_t` | type | `logic` | AXI AW channel type. |
+| `axi_w_t` | type | `logic` | AXI W channel type. |
+| `axi_b_t` | type | `logic` | AXI B channel type. |
+| `axi_req_t` | type | `logic` | Bundled AXI request type. |
+| `axi_resp_t` | type | `logic` | Bundled AXI response type. |
+| `exception_t` | type | `logic` | Exception type for accelerator/MMU interfacing. |
+| `accelerator_req_t` | type | `logic` | Accelerator request type from CVA6. |
+| `accelerator_resp_t` | type | `logic` | Accelerator response type to CVA6. |
+| `acc_mmu_req_t` | type | `logic` | MMU translation request type. |
+| `acc_mmu_resp_t` | type | `logic` | MMU translation response type. |
+| `cva6_to_acc_t` | type | `logic` | Packed CVA6-to-accelerator channel type. |
+| `acc_to_cva6_t` | type | `logic` | Packed accelerator-to-CVA6 channel type. |
+
+## Ports
+
+| Port | Direction | Description |
+|------|-----------|-------------|
+| `clk_i` | Input | System clock. |
+| `rst_ni` | Input | Active-low synchronous reset. |
+| `scan_enable_i` | Input | Scan chain enable for manufacturing test. |
+| `scan_data_i` | Input | Scan chain data input. |
+| `scan_data_o` | Output | Scan chain data output. |
+| `acc_req_i` | Input | Vector instruction request from CVA6 (`cva6_to_acc_t`). Carries the encoded RVV instruction and scalar operands. |
+| `acc_resp_o` | Output | Response back to CVA6 (`acc_to_cva6_t`). Carries scalar results, exception information, and handshake signals. |
+| `axi_req_o` | Output | AXI memory request (`axi_req_t`). Driven by the VLSU for all vector memory accesses. |
+| `axi_resp_i` | Input | AXI memory response (`axi_resp_t`). Read data and write acknowledgements from the memory subsystem. |
+
+## Derived localparams
+
+These parameters are computed automatically from `NrLanes` and `VLEN`. Do not override them.
+
+| Name | Formula | Description |
+|------|---------|-------------|
+| `NrPEs` | `NrLanes + 4` | Total processing elements: each lane plus VLSU (load + store counted as one port), SLDU, and MASKU. |
+| `MaxVLenPerLane` | `VLEN / NrLanes` | Maximum vector length handled by a single lane, in bits. |
+| `MaxVLenBPerLane` | `VLEN / (8 * NrLanes)` | Maximum vector length handled by a single lane, in bytes. |
+| `VRFSizePerLane` | `MaxVLenPerLane × 32` | Total VRF storage per lane in bits (32 vector registers). |
+| `VRFBSizePerLane` | `MaxVLenBPerLane × 32` | Total VRF storage per lane in bytes. |
+
+## Internal submodules
+
+`ara` instantiates the following sub-units:
+
+- **`ara_dispatcher`** — Fully decodes RVV instructions, maintains vector CSR state (`vl`, `vtype`, `vstart`, `vxrm`, `vxsat`), handles EW-mismatch reshuffling, and injects segment/reshuffle micro-ops.
+- **`ara_sequencer`** — Manages instruction lifecycle, tracks RAW/WAR/WAW dependencies, broadcasts work to all processing elements, and handles scalar result return and exception propagation.
+- **`lane` (×`NrLanes`)** — Each lane holds a VRF slice and arithmetic units (ALU, multiplier, divider, FPU). Lanes operate in parallel on element slices.
+- **`vlsu`** — Vector Load/Store Unit. Issues AXI4 AR/AW transactions for all vector memory operations. Integrates with CVA6's MMU when `OSSupport=1`.
+- **`sldu`** — Slide Unit. Performs byte-level reshuffling and vector slide operations using all-to-all lane connectivity.
+- **`masku`** — Mask Unit. Assembles and distributes predication bits, executes bit-level mask instructions (`vfirst`, `vcpop`, `vrgather`), and shares scalar result lines with the sequencer.
+
+## Integration note
+
+`ara` is instantiated inside `ara_system` alongside CVA6. The `ara_system` wrapper connects `ara` to CVA6's accelerator port and routes the AXI interface to the memory crossbar. The accelerator interface (`acc_req_i` / `acc_resp_o`) carries instructions only after they have been committed from CVA6's scoreboard and are no longer speculative.

@@ -1,0 +1,146 @@
+---
+title: "Programming Ara with RISC-V Vector Extension (RVV 1.0)"
+description: "Write RVV 1.0 programs for Ara using C intrinsics or inline assembly. Covers vtype, vl, LMUL, strip-mining patterns, and compiler flags for the LLVM toolchain."
+---
+
+Ara implements the [RISC-V Vector Extension, version 1.0](https://github.com/riscv/riscv-v-spec/releases/tag/v1.0) (RVV 1.0). Unlike fixed-width SIMD ISAs, RVV uses an application-binary-level abstraction where the hardware exposes a configurable vector length and element type at runtime. Application code sets these parameters with `vsetvli`/`vsetvl` instructions, and the hardware executes as many elements in parallel as its lane count allows — the programmer does not need to know the physical lane count at compile time.
+
+## Key RVV concepts
+
+| Concept | Description |
+|---|---|
+| **vl** (vector length) | The number of elements to be processed in the current operation. Set by `vsetvli` or `vsetvl`. The hardware may return a smaller `vl` than requested; the application must handle the remainder in a strip-mining loop. |
+| **SEW** (Selected Element Width) | The bit width of each element: 8, 16, 32, or 64 bits. Encoded in the `vtype` CSR. |
+| **LMUL** (Length MULtiplier) | Groups multiple vector registers into a single logical register, effectively widening the usable vector length. Values: 1/8, 1/4, 1/2, 1, 2, 4, 8. |
+| **ELEN** | Maximum element width the hardware supports. On Ara, ELEN=64 (64-bit elements, i.e. double-precision floats or 64-bit integers). |
+| **VLEN** | Physical length of a single vector register in bits. Configuration-dependent: 2048 bits for a 2-lane build, 4096 bits for 4 lanes, 8192 bits for 8 lanes. |
+
+<Note>
+  Ara supports LMUL = 1, 2, 4, and 8 as well as the fractional values 1/2, 1/4,
+  and 1/8. Fractional LMUL is useful when you need more independent vector
+  registers (e.g. to hide load latency) at the cost of a shorter effective
+  vector length.
+</Note>
+
+## Setting vector length
+
+Use `vsetvli` to configure the vector type and obtain the hardware-granted `vl`. The compiler intrinsic form is:
+
+```c
+#include <riscv_vector.h>
+
+// Request vl for 64-bit (double-precision) elements with LMUL=1
+size_t vl = __riscv_vsetvl_e64m1(n);
+```
+
+Or using inline assembly (as found in the Ara kernel sources):
+
+```c
+// vsetvli rd, rs1, e64, m4, ta, ma
+// e64 = 64-bit elements, m4 = LMUL=4, ta = tail agnostic, ma = mask agnostic
+size_t block_size_p;
+asm volatile("vsetvli %0, %1, e64, m4, ta, ma"
+             : "=r"(block_size_p)
+             : "r"(P));
+```
+
+## Example: vector FMA in fmatmul
+
+The floating-point matrix multiplication kernel (`apps/fmatmul/kernel/fmatmul.c`) is a representative example of RVV programming on Ara. The inner loop uses `vfmacc.vf` (vector-float fused multiply-accumulate) together with `vle64.v` (vector load, 64-bit elements):
+
+```c
+// Set vector configuration: e64, LMUL=4, tail/mask agnostic
+asm volatile("vsetvli %0, %1, e64, m4, ta, ma"
+             : "=r"(block_size_p) : "r"(P));
+
+// Initialise accumulator registers to zero
+asm volatile("vmv.v.i v0,  0");
+asm volatile("vmv.v.i v4,  0");
+asm volatile("vmv.v.i v8,  0");
+asm volatile("vmv.v.i v12, 0");
+
+// Inner loop: load a row of B and accumulate
+asm volatile("vle64.v v16, (%0);" :: "r"(b));   // load row of B
+asm volatile("vfmacc.vf v0, %0, v16" :: "f"(t0)); // C[row0] += a[row0,k] * B[k,:]
+asm volatile("vfmacc.vf v4, %0, v16" :: "f"(t1)); // C[row1] += a[row1,k] * B[k,:]
+asm volatile("vfmacc.vf v8, %0, v16" :: "f"(t2)); // C[row2] += ...
+asm volatile("vfmacc.vf v12,%0, v16" :: "f"(t3)); // C[row3] += ...
+```
+
+With LMUL=4, registers `v0–v3` form a single logical register holding 4×VLEN/64 double-precision elements, enabling wide accumulation without scalar overhead.
+
+## Compiling for Ara
+
+Ara requires an LLVM toolchain with RVV 1.0 support. The exact flags used by the `apps/` build system (from `apps/common/runtime.mk`) are:
+
+```
+-march=rv64gcv_zfh_zvfh   # RV64GC + V 1.0 + Zfh (half-precision float)
+-mabi=lp64d
+-mno-relax
+-fuse-ld=lld
+-fno-vectorize                         # disable auto-vectorisation (use hand-written RVV)
+-mllvm -scalable-vectorization=off
+-mllvm -riscv-v-vector-bits-min=0
+-O3 -ffast-math
+```
+
+Build the LLVM toolchain for Ara from the repository root:
+
+```bash
+make toolchain-llvm
+```
+
+For Linux (OS) targets, GCC from the buildroot sysroot is used instead, with `-march=rv64gcv`.
+
+## Common patterns
+
+### Strip-mining loops
+
+RVV programs process arrays of arbitrary length by strip-mining: each iteration asks for up to `n` elements, receives `vl ≤ n` from the hardware, processes them, and advances the pointer by `vl`:
+
+```c
+size_t n = array_length;
+double *a = src;
+double *b = dst;
+
+while (n > 0) {
+    size_t vl = __riscv_vsetvl_e64m1(n);
+    vfloat64m1_t va = __riscv_vle64_v_f64m1(a, vl);
+    // ... compute ...
+    __riscv_vse64_v_f64m1(b, result, vl);
+    a += vl;
+    b += vl;
+    n -= vl;
+}
+```
+
+### Mask operations for conditional code
+
+RVV provides mask registers (`v0`) and masked variants of every instruction (suffix `.m` or `.vm`). Use them instead of scalar branches inside vector loops:
+
+```c
+// Compute mask: elements where a > 0
+vbool64_t mask = __riscv_vmfgt_vf_f64m1_b64(va, 0.0f, vl);
+// Apply operation only to unmasked elements (ReLU)
+vfloat64m1_t result = __riscv_vmerge_vvm_f64m1(zero, va, mask, vl);
+```
+
+### LMUL > 1 for wider register groups
+
+Increasing LMUL groups physical registers into wider logical registers, increasing the effective vector length per instruction and reducing instruction count for large arrays:
+
+```c
+// LMUL=8: 8 physical registers act as one logical register
+// Effective vl = 8 * VLEN / SEW elements
+size_t vl = __riscv_vsetvl_e64m8(n);
+vfloat64m8_t va = __riscv_vle64_v_f64m8(a, vl);
+```
+
+Note that LMUL=8 with SEW=64 leaves no free registers for temporaries. Use LMUL=4 (as in `fmatmul`) when you need accumulators alongside the data registers.
+
+<Tip>
+  Use Spike for fast functional verification of your RVV code before committing
+  to a full RTL simulation run. Spike simulates in seconds what Verilator takes
+  minutes to process, making it ideal for catching algorithmic bugs early.
+  Build Spike with `make riscv-isa-sim` and run with `make spike-run-<app>`.
+</Tip>

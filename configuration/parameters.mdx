@@ -1,0 +1,77 @@
+---
+title: "Ara Hardware Parameters: Lanes, VLEN, FPU, and More"
+description: "Reference for all Ara SystemVerilog module parameters including NrLanes, VLEN, FPUSupport, FixPtSupport, SegSupport, and AXI interface widths."
+---
+
+Ara's hardware is parameterized via SystemVerilog parameters in the `ara` top-level module (`hardware/src/ara.sv`). These parameters control the number of vector lanes, register file size, floating-point support level, and AXI interface widths. Most parameters have sensible defaults; `NrLanes` and `VLEN` must always be set explicitly.
+
+## Parameters
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `NrLanes` | `int unsigned` | — (required) | Number of parallel vector lanes. Must be a power of 2: 2, 4, 8, or 16. |
+| `VLEN` | `int unsigned` | — (required) | Vector register length in bits. Must be greater than 128. Typically set to `NrLanes × 1024`. |
+| `OSSupport` | `int unsigned` | `1` | Enables MMU integration and fault-only-first load logic for OS-capable systems. Set to `0` to disable. |
+| `FPUSupport` | `fpu_support_e` | `FPUSupportHalfSingleDouble` | Floating-point precision tiers supported by the vector FPU. See [FPU support enum](#fpu-support-enum) below. |
+| `FPExtSupport` | `fpext_support_e` | `FPExtSupportEnable` | Enables external FP support for `vfrec7` and `vfrsqrt7` instructions and round-toward-odd rounding mode. |
+| `FixPtSupport` | `fixpt_support_e` | `FixedPointEnable` | Enables fixed-point arithmetic instructions. |
+| `SegSupport` | `seg_support_e` | `SegSupportEnable` | Enables segmented memory operations (unit-stride, strided, and indexed segment loads/stores). |
+| `AxiDataWidth` | `int unsigned` | — (required) | Data bus width of the AXI4 memory interface, in bits. |
+| `AxiAddrWidth` | `int unsigned` | — (required) | Address bus width of the AXI4 memory interface, in bits. |
+
+## FPU support enum
+
+`fpu_support_e` is a 6-bit enum defined in `ara_pkg.sv`. Each bit enables a specific floating-point extension. The six bits correspond to `{RVVD, RVVF, RVVH, RVVHA, RVVB, RVVBA}`.
+
+| Value | Bit pattern | Enabled precisions |
+|-------|-------------|-------------------|
+| `FPUSupportNone` | `6'b000000` | No floating-point support |
+| `FPUSupportHalf` | `6'b001000` | FP16 (half precision) |
+| `FPUSupportSingle` | `6'b010000` | FP32 (single precision) |
+| `FPUSupportHalfSingle` | `6'b011000` | FP16 + FP32 |
+| `FPUSupportDouble` | `6'b100000` | FP64 (double precision) |
+| `FPUSupportSingleDouble` | `6'b110000` | FP32 + FP64 |
+| `FPUSupportHalfSingleDouble` | `6'b111000` | FP16 + FP32 + FP64 (default) |
+| `FPUSupportAll` | `6'b111111` | All FP formats including alternate half and brain-float variants |
+
+## Feature enable enums
+
+Each of the following enums is a 1-bit type. The `Enable` value is the default in each case.
+
+**`fixpt_support_e`** — fixed-point arithmetic:
+
+| Value | Description |
+|-------|-------------|
+| `FixedPointDisable` | Fixed-point instructions not synthesized |
+| `FixedPointEnable` | Fixed-point arithmetic enabled (default) |
+
+**`seg_support_e`** — segmented memory operations:
+
+| Value | Description |
+|-------|-------------|
+| `SegSupportDisable` | Segment load/store units not synthesized |
+| `SegSupportEnable` | Segmented memory operations enabled (default) |
+
+**`fpext_support_e`** — extended FP approximation instructions:
+
+| Value | Description |
+|-------|-------------|
+| `FPExtSupportDisable` | `vfrec7` and `vfrsqrt7` not synthesized |
+| `FPExtSupportEnable` | External FP approximation support enabled (default) |
+
+## Derived localparams
+
+Several values are computed automatically from `NrLanes` and `VLEN`. Do not set these manually.
+
+<Note>
+The following localparams are derived automatically inside the `ara` module and reflect the internal microarchitecture:
+
+- **`NrPEs`** = `NrLanes + 4` — total processing elements (lanes plus the vector load unit, vector store unit, slide unit, and mask unit).
+- **`MaxVLenPerLane`** = `VLEN / NrLanes` — maximum number of bits each lane holds of a single vector register.
+- **`VRFSizePerLane`** = `MaxVLenPerLane × 32` — total vector register file size per lane in bits (32 architectural vector registers).
+- **`VLENB`** = `VLEN / 8` — `VLEN` expressed in bytes, used throughout the RTL.
+</Note>
+
+<Warning>
+Do not override the `localparam` values (`NrPEs`, `vlen_t`, `VLENB`) when instantiating the `ara` module. These are marked `// Dependant parameters. DO NOT CHANGE!` in the source and are derived solely from `NrLanes` and `VLEN`. Overriding them will cause mismatches between the hardware and software runtime.
+</Warning>

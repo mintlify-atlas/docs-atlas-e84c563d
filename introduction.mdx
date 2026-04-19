@@ -1,0 +1,94 @@
+---
+title: "What is Ara? Open-Source RISC-V Vector Processor"
+description: "Ara is an open-source RVV 1.0 vector coprocessor from ETH Zurich's PULP Platform for high-efficiency data-parallel computing in RISC-V SoC designs."
+---
+
+Ara is an open-source vector processing unit developed by the [PULP Platform](https://pulp-platform.org/) at ETH Zurich and the University of Bologna. It operates as a coprocessor to the [CVA6](https://github.com/openhwgroup/cva6) scalar core and implements the **RISC-V Vector Extension v1.0 (RVV)** — the ratified standard for vector computation on RISC-V processors. Ara is designed to bring scalable, energy-efficient data-parallel acceleration to custom SoC designs, research prototypes, and FPGA platforms, with a fully open-source hardware implementation licensed under Solderpad 0.51.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="RVV 1.0 compliant" icon="circle-check">
+    Full compliance with the ratified RISC-V Vector Extension specification v1.0, including integer, floating-point, fixed-point, mask, reduction, and permutation instructions.
+  </Card>
+  <Card title="Scalable vector lanes" icon="layer-group">
+    Configure 2, 4, 8, or 16 parallel vector lanes at elaboration time. Each lane holds a slice of the vector register file and its own SIMD compute units.
+  </Card>
+  <Card title="Multi-precision floating-point" icon="calculator">
+    Supports FP16, FP32, and FP64 floating-point arithmetic, including widening operations, fused multiply-add, square root, and reciprocal estimates.
+  </Card>
+  <Card title="Fixed-point arithmetic" icon="hashtag">
+    Hardware support for saturating add/subtract, averaging, fractional multiply, scaling shifts, and narrowing clip instructions.
+  </Card>
+  <Card title="AXI4 memory interface" icon="database">
+    Standard AXI4 interconnect for both instruction and data memory, enabling straightforward integration into any AXI-based SoC.
+  </Card>
+  <Card title="CVA6 integration" icon="microchip">
+    Tightly coupled to the CVA6 (formerly Ariane) 64-bit RISC-V scalar core via the accelerator interface. CVA6 decodes and dispatches vector instructions to Ara.
+  </Card>
+  <Card title="FPGA support" icon="circuit-board">
+    Tested on Xilinx VCU128 and VCU118 FPGAs via the Cheshire SoC flow, supporting both bare-metal and Linux operation with a 2-lane configuration.
+  </Card>
+  <Card title="Ideal dispatcher mode" icon="bolt">
+    An optional ideal FIFO dispatcher replaces CVA6 during performance profiling, isolating vector throughput from scalar overhead.
+  </Card>
+</CardGroup>
+
+## Architecture at a glance
+
+Ara is structured as a collection of cooperating hardware units. The following describes each major component:
+
+**Dispatcher** — Receives vector instructions from CVA6 over the accelerator interface. It decodes the instruction, reads scalar operands, and forwards the decoded operation to the sequencer.
+
+**Sequencer** — Manages in-order issue of vector operations across the lanes. It resolves data hazards, tracks vector register file dependencies, and dispatches micro-operations to each lane and to the shared functional units.
+
+**Vector lanes** — The main compute fabric. Each lane contains:
+- A slice of the 32-entry vector register file (VRF)
+- A SIMD integer ALU and multiplier
+- A SIMD floating-point unit (FPU) with multi-precision support
+- Operand requesters that stream register data to functional units
+
+**Vector Load/Store Unit (VLSU)** — Handles all memory operations: unit-stride, strided, indexed, segment, and fault-only-first loads and stores. It interfaces with the AXI4 memory bus.
+
+**Slide Unit (SLDU)** — Executes vector slide and inter-lane data movement operations, including `vslideup`, `vslidedown`, `vrgather`, and `vcompress`.
+
+**Mask Unit (MASKU)** — Handles mask register operations, mask-logical instructions, population count (`vcpop.m`), first-set-bit (`vfirst.m`), and permutation support (`viota`, `vid`).
+
+<Note>
+  Ara's maximum supported element width is **ELEN = 64 bits**. Operations on elements wider than 64 bits are not supported. The number of lanes must be a **power of two** (2, 4, 8, or 16). VLEN must be greater than 128 bits and is a function of `NrLanes` and the per-lane register file depth.
+</Note>
+
+## Target use cases
+
+- **Academic research** — Ara is actively used in publications on vector processor microarchitecture, memory system design, and RISC-V ISA research. All hardware sources and benchmarks are openly available for reproduction and extension.
+- **Hardware/software co-design** — The included application suite (matrix multiply, convolution, FFT, DWT, pathfinder, and more) and the Spike ISA simulator allow algorithm developers to profile and tune software before committing to silicon.
+- **Custom SoC accelerators** — Ara's modular AXI4 interface and configurable lane count make it suitable as a vector acceleration block in custom chip designs targeting edge AI, signal processing, or scientific computing.
+- **FPGA prototyping** — The Cheshire-based FPGA flow enables full-system prototyping on VCU128 and VCU118, including a Linux boot and RVV-accelerated userspace applications.
+
+## Performance
+
+Ara was taped out and characterized in **22 nm FD-SOI** technology, achieving a clock frequency of **1 GHz+** at nominal operating conditions (as reported in the IEEE TVLSI 2020 paper). The theoretical peak throughput scales linearly with lane count:
+
+- Maximum throughput: **2 × NrLanes** 64-bit data packets per cycle
+- A 4-lane configuration sustains up to 8 double-precision FLOP/cycle at 1 GHz
+- A 16-lane configuration can sustain 32 FLOP/cycle at peak
+
+Published results across three peer-reviewed papers cover single-core efficiency on matrix multiply, FFT, and convolution kernels; multi-core scalability (Ara2); and instruction-level benchmarking via `rvv-bench`.
+
+<Note>
+  Achievable throughput depends heavily on memory bandwidth, vectorization quality, and the ratio of compute to load/store instructions in the workload. The ideal dispatcher mode (replacing CVA6 with a FIFO) can be used to measure the upper-bound vector throughput independent of scalar dispatch overhead.
+</Note>
+
+## Explore further
+
+<CardGroup cols={3}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Clone the repo, build the toolchain, and run your first RTL simulation in four steps.
+  </Card>
+  <Card title="Architecture overview" icon="sitemap" href="/architecture/overview">
+    Detailed description of every hardware unit, their interfaces, and data flow.
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/configuration/parameters">
+    Reference for all hardware parameters: lane count, VLEN, FPU options, and more.
+  </Card>
+</CardGroup>

@@ -1,0 +1,82 @@
+---
+title: "Dispatcher and Sequencer Module Reference"
+description: "ara_dispatcher and ara_sequencer module reference: RVV instruction decode, CSR management, dependency tracking, and broadcast to Ara's processing elements."
+---
+
+`ara_dispatcher` and `ara_sequencer` work together to decode RVV instructions arriving from CVA6 and schedule them across Ara's parallel processing elements. The dispatcher handles full instruction decoding and CSR state management; the sequencer handles instruction lifecycle, dependency tracking, and result collection.
+
+## ara_dispatcher
+
+### Purpose
+
+`ara_dispatcher` is the central instruction decoder and legality checker for Ara. It receives instructions from CVA6 via `acc_req_i` and issues well-formed vector requests to the backend via `ara_req_o`.
+
+### Key responsibilities
+
+- **Full RVV instruction decode** — Extracts and interprets all RVV encoding fields (`vmem_type`, `varith_type`, `mop`, `nf`, `vm`, `rs1`, `rs2`, `rd`, `mew`, `width`, etc.). Validates legality based on current LMUL, SEW, and CSR state.
+- **CSR state management** — Maintains `vl`, `vtype`, `vstart`, `vxrm`, and `vxsat`. Only `vstart`, `vxrm`, and `vxsat` are writable via `csrrw`/`csrrs`/`csrrc` and their immediate variants; `vl`, `vtype`, and `vlenb` are read-only.
+- **EEW tracking and register reshuffling** — Each vector register has an associated element effective width (`eew_q[0..31]`). When a register is reused with a different EEW, the dispatcher enters the `RESHUFFLE` FSM state and injects internal slide micro-ops to re-encode the byte layout before the instruction executes.
+- **Segment micro-op injection** — Detects segment memory operations (`nf != 0`) and injects the required sequence of sub-operations.
+- **Legality checks** — Raises illegal instruction exceptions for: invalid register groups given current SEW/LMUL, `EMUL × NF > 8`, accesses beyond register 31, inconsistent EEW across a register group, disallowed CSR writes, and FP/fixed-point ops without the corresponding hardware support (`FPUSupport`, `FPExtSupport`, `FixPtSupport`).
+- **Zero-VL handling** — When `vl = 0`, most instructions are treated as NOPs. The dispatcher immediately acknowledges them to avoid stalling CVA6's pipeline.
+
+### FSM states
+
+| State | Description |
+|-------|-------------|
+| `IDLE` | Waiting for a valid vector instruction from CVA6. |
+| `WAIT_IDLE` | Waiting for Ara to become fully idle before executing a CSR-modifying instruction. |
+| `WAIT_IDLE_FLUSH` | Flushes vector pipeline state after an exception. |
+| `RESHUFFLE` | Injecting reshuffle micro-ops for an EEW mismatch before re-issuing the original instruction. |
+
+### Key parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `NrLanes` | Number of parallel lanes; inherited from `ara`. |
+| `VLEN` | Total vector length in bits. |
+| `FPUSupport` | Controls which FP formats are legal. |
+| `FPExtSupport` | Controls legality of `vfrec7` / `vfrsqrt7`. |
+| `FixPtSupport` | Controls legality of fixed-point instructions. |
+| `SegSupport` | Controls legality of segment memory operations. |
+| `CVA6Cfg` | CVA6 configuration; used to derive `xlen_t` and interface types. |
+
+---
+
+## ara_sequencer
+
+### Purpose
+
+`ara_sequencer` manages the lifecycle of every in-flight vector instruction. It allocates instruction IDs, tracks RAW/WAR/WAW dependencies, broadcasts work to processing elements, and handles scalar result return and exception propagation back to CVA6.
+
+### Key responsibilities
+
+- **In-flight instruction tracking** — Maintains a scoreboard for up to `NrVInsn = 8` concurrent instructions using `pe_vinsn_running_q` bitmaps per processing element and an aggregated `vinsn_running_q` for debug visibility.
+- **Dependency management** — Computes RAW, WAR, and WAW hazards against `read_list_q` and `write_list_q`. Broadcasts a `global_hazard_table_o` matrix (`NrVInsn × NrVInsn`) to all operand requesters so that chaining can be implemented at element granularity inside each lane.
+- **Work broadcast** — Issues a single `pe_req_o` to all processing elements simultaneously (all lanes, VLSU, SLDU, MASKU). Each PE accepts or ignores the request based on its target VFU field.
+- **Functional unit arbitration** — Tracks per-FU in-flight instruction counts. Stalls issue when a target FU's queue is full. Uses a "gold ticket" mechanism to handle the one-cycle overshoot that can occur for timing reasons.
+- **Scalar result collection** — Waits in `WAIT` state for scalar results returned via `pe_scalar_resp_i` (driven by the mask unit or slide unit) and forwards them to CVA6 via `ara_resp_o`.
+- **Exception propagation** — Receives exception signals from the address generator (`addrgen_exception_i`, `addrgen_fof_exception_i`) and the store unit (`lsu_current_burst_exception_i`). Returns them to CVA6 with precise `vstart` information.
+
+### FSM states
+
+| State | Description |
+|-------|-------------|
+| `IDLE` | Default state; waits for a new instruction from the dispatcher or handles operand-requester stalls. |
+| `WAIT` | Holding state while waiting for a scalar return value or memory acknowledgement. |
+
+---
+
+## Instruction flow
+
+The following steps describe the path of a single RVV instruction from CVA6 through to completion:
+
+1. **CVA6 issues the instruction** — The instruction reaches the top of CVA6's scoreboard (it is committed and non-speculative) and is sent to Ara via `acc_req_i`.
+2. **First-pass decode in CVA6** — A lightweight `cva6_accel_first_pass_decoder` pre-decodes the instruction inside the CVA6 pipeline to identify it as a vector instruction and stall the scalar pipeline if needed.
+3. **`ara_dispatcher` fully decodes** — The dispatcher decodes the full RVV encoding, validates legality, updates CSR state, and—if reshuffling is required—injects reshuffle micro-ops before issuing the main instruction via `ara_req_o`.
+4. **`ara_sequencer` issues to PEs** — The sequencer allocates an instruction ID, checks hazards, builds `pe_req_o`, and broadcasts it to all processing elements. It updates the hazard table and instruction trackers.
+5. **Result or exception returned to CVA6** — Once the instruction completes (scalar result available, or memory op acknowledged, or exception detected), the sequencer responds to the dispatcher, which forwards the result or exception to CVA6 via `acc_resp_o`.
+
+<Note>
+`NrVInsn = 8` is the maximum number of vector instructions that can be in-flight simultaneously across all processing elements. This constant is defined in `ara_pkg` and is not a configurable parameter.
+</Note>

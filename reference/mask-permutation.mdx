@@ -1,0 +1,75 @@
+---
+title: "Vector Mask and Permutation Instructions in Ara"
+description: "RVV 1.0 mask register logical operations, mask population count, slide, gather, compress, and scalar move instructions supported by Ara."
+---
+
+Ara supports the full set of RVV 1.0 mask and permutation instructions. Mask instructions operate on single-bit mask registers (one bit per vector element) to implement predication and population-count queries. Permutation instructions move data within and across vector registers, including scalar moves, sliding windows, indexed gather, and compress.
+
+## Mask register logical operations
+
+These instructions perform bitwise Boolean operations on mask registers, where each bit corresponds to one vector element.
+
+| Instruction | Operation |
+|---|---|
+| `vmand` | AND |
+| `vmnand` | NAND |
+| `vmandnot` | AND-NOT (dest = src1 AND NOT src2) |
+| `vmxor` | XOR |
+| `vmor` | OR |
+| `vmnor` | NOR |
+| `vmornot` | OR-NOT (dest = src1 OR NOT src2) |
+| `vmxnor` | XNOR |
+
+## Mask instructions
+
+| Instruction | Operation |
+|---|---|
+| `vmsbf` | Set before first — sets bits before the first active set bit |
+| `vmsof` | Set only first — sets only the first active set bit |
+| `vmsif` | Set including first — sets bits up to and including the first set bit |
+| `viota` | Write the count of preceding set mask bits into each element |
+| `vid` | Write element index into each active element |
+
+## Population count and find-first
+
+| Instruction | Operation |
+|---|---|
+| `vcpop.m` | Count the number of set bits in a mask register |
+| `vfirst.m` | Return the index of the first set bit in a mask register |
+
+## Scalar move
+
+### Integer scalar move
+
+| Instruction | Operation |
+|---|---|
+| `vmv.x.s` | Copy element 0 of a vector register to an integer scalar register |
+| `vmv.s.x` | Copy an integer scalar register into element 0 of a vector register |
+
+### Floating-point scalar move
+
+| Instruction | Operation |
+|---|---|
+| `vfmv.f.s` | Copy element 0 of a vector register to a floating-point scalar register |
+| `vfmv.s.f` | Copy a floating-point scalar register into element 0 of a vector register |
+
+## Slide instructions
+
+Slide instructions shift elements up or down within a vector register by a fixed count, optionally inserting a scalar value at the exposed boundary element.
+
+| Instruction | Operation |
+|---|---|
+| `vslideup` | Slide elements up by an immediate or register offset |
+| `vslidedown` | Slide elements down by an immediate or register offset |
+| `vslide1up` | Slide up by 1, inserting an integer scalar at element 0 |
+| `vfslide1up` | Slide up by 1, inserting a floating-point scalar at element 0 |
+| `vslide1down` | Slide down by 1, inserting an integer scalar at the last active element |
+| `vfslide1down` | Slide down by 1, inserting a floating-point scalar at the last active element |
+
+## Gather and compress
+
+| Instruction | Operation |
+|---|---|
+| `vrgather` | Gather elements from a source register using per-element indices (index width = SEW) |
+| `vrgatherei16` | Gather elements using 16-bit indices, regardless of SEW |
+| `vcompress` | Pack active (mask-selected) elements into the low elements of the destination |

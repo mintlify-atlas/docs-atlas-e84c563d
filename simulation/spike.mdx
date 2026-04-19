@@ -1,0 +1,57 @@
+---
+title: "Spike ISA Simulation for Ara Applications"
+description: "Use the Spike RISC-V ISA simulator to run Ara software without hardware. Build Spike with RVV 1.0 support, compile applications, and run functional simulations."
+---
+
+Spike is a fast, instruction-accurate RISC-V ISA simulator. It runs Ara application binaries at functional level without any RTL, making it the fastest way to verify software correctness before committing to a full cycle-accurate simulation.
+
+## Building Spike
+
+From the Ara repository root, build the patched Spike with RVV 1.0 support:
+
+```bash
+make riscv-isa-sim
+```
+
+If you encounter dynamic linking errors with your system compiler, build with a statically linked C++ standard library instead:
+
+```bash
+make riscv-isa-sim LDFLAGS="-static-libstdc++"
+```
+
+<Warning>
+Spike has known linking issues with newer compiler versions. gcc/g++ **7.2.0** is the recommended version. If you see errors about missing `libstdc++` symbols, use the `LDFLAGS="-static-libstdc++"` workaround above.
+</Warning>
+
+## Running applications
+
+<Steps>
+  <Step title="Build the Spike binary">
+    Applications need a separate binary compiled for the Spike environment. From the `apps` directory:
+
+    ```bash
+    cd apps
+    make bin/hello_world.spike
+    ```
+  </Step>
+  <Step title="Run the application">
+    Execute the binary with Spike:
+
+    ```bash
+    make spike-run-hello_world
+    ```
+
+    Replace `hello_world` with the name of any application under `apps/`.
+  </Step>
+</Steps>
+
+## Spike vs RTL simulation
+
+| | Speed | Accuracy | Use case |
+|---|---|---|---|
+| **Spike** | Fast (native execution) | Functional only — no timing information | Software correctness, algorithm validation |
+| **RTL (Verilator/ModelSim)** | Slow (cycle-accurate) | Cycle-accurate — true hardware behavior | Performance characterization, microarchitecture verification |
+
+<Tip>
+Use Spike to debug your software first. Once the application produces correct results in Spike, move to RTL simulation to measure cycle counts and identify performance bottlenecks.
+</Tip>

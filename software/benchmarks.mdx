@@ -1,0 +1,91 @@
+---
+title: "Ara Benchmark Suite: Performance and Analysis"
+description: "Run Ara's benchmark suite covering matrix ops, FFT, and convolution. Generate performance plots with Python scripts and VCD traces for power analysis."
+---
+
+Ara ships with a comprehensive benchmark suite covering compute-intensive kernels from linear algebra, signal processing, image processing, and machine learning workloads. The suite is designed to measure sustained vector throughput across different lane configurations and to produce data for publication-quality performance plots. Results are reported as 64-bit packets processed per cycle, making them directly comparable across configurations.
+
+## Running benchmarks
+
+To run all benchmarks in sequence against the RTL model:
+
+```bash
+make -C hardware benchmark_all
+```
+
+To run a single benchmark individually, pass the `app` variable to the Verilator simulation target:
+
+```bash
+app=fmatmul make -C hardware simv
+app=fft make -C hardware simv
+app=fconv3d make -C hardware simv
+```
+
+Benchmark output is printed to stdout and captured in the simulation log. The default lane configuration is `default` (4 lanes, VLEN=4096). To benchmark with a different configuration, prepend `config=`:
+
+```bash
+config=2_lanes app=fmatmul make -C hardware simv
+config=8_lanes app=fmatmul make -C hardware simv
+```
+
+## VCD power analysis
+
+Several kernels support automatic VCD dumping for accurate activity-based power analysis using commercial power estimation tools. The `vcd_dump=1` flag must be passed at both compile and simulation time so that the kernel delimits the measurement window precisely (using the `event_trigger` mechanism in the source).
+
+**Kernels that support VCD dumping:**
+`fmatmul`, `fconv3d`, `fft`, `dwt`, `exp`, `cos`, `log`, `dropout`, `jacobi2d`
+
+Compile with VCD dumping enabled:
+
+```bash
+make -C apps bin/${program} vcd_dump=1
+```
+
+Simulate and produce the VCD file:
+
+```bash
+make -C hardware simc app=${program} vcd_dump=1
+```
+
+The resulting VCD file is written to the hardware simulation output directory and can be loaded into your power analysis flow.
+
+## Performance analysis scripts
+
+The `script/` directory in the repository root contains Python utilities for processing simulation output and generating plots:
+
+| Script | Purpose |
+|---|---|
+| `performance.py` | Parse simulation logs and compute cycle counts and throughput metrics |
+| `plot2d.py` | Generate 2D performance plots (throughput vs. problem size) |
+| `format_summary.py` | Format benchmark result tables for human-readable summaries |
+| `check_cycles.py` | Verify cycle counts against expected reference values |
+
+A Gnuplot script (`benchmark.gnuplot`) and shell wrappers (`benchmark.sh`, `benchmark_all.sh`) are also provided for batch runs and plot generation.
+
+## rvv-bench instruction benchmark
+
+[rvv-bench](https://github.com/camel-cdr/rvv-bench) is an instruction-level microbenchmark suite that measures the raw throughput of individual RVV instructions. It is vendored into `apps/rvv-bench/`.
+
+Set up the rvv-bench sources, then build and simulate:
+
+```bash
+# Fetch and prepare the rvv-bench sources
+make rvv-bench
+
+# Build the rvv binary
+make -C apps bin/rvv
+
+# Run through the Verilator RTL model
+make -C hardware simv app=rvv
+```
+
+This is useful for characterising the latency and throughput of specific vector instructions in isolation, separate from memory system effects.
+
+## Interpreting results
+
+Ara reports performance as **64-bit element packets processed per cycle** (equivalently, double-precision FLOP/cycle for floating-point kernels). Key points when comparing results:
+
+- **Lane scaling**: throughput scales linearly with the number of lanes for compute-bound kernels. A 4-lane configuration delivers roughly twice the throughput of a 2-lane configuration at the same frequency.
+- **VLEN effect**: larger VLEN (set per-configuration, e.g. 4096 bits for 4 lanes) allows longer strip-mining iterations and reduces loop overhead, improving efficiency for large problem sizes.
+- **Memory-bound kernels** (e.g. `gemv`, `spmv`) do not scale linearly with lanes — memory bandwidth becomes the bottleneck. Compare their throughput against the theoretical memory bandwidth limit for the configuration under test.
+- **VCD-delimited measurements**: when `vcd_dump=1` is used, the kernel measures only the innermost computation window (not initialisation or verification), giving the cleanest throughput numbers for power estimation.

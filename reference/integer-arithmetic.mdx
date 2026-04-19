@@ -1,0 +1,189 @@
+---
+title: "Vector Integer Arithmetic Instructions in Ara"
+description: "All RVV 1.0 integer arithmetic instructions supported by Ara: add/subtract, multiply, divide, shift, comparison, min/max, merge, and fixed-point operations."
+---
+
+Ara supports the complete set of RVV 1.0 integer arithmetic instructions, including single-width and widening variants, bitwise logical operations, shifts, comparisons, multiply-add, and fixed-point arithmetic. All operations apply element-wise across the active vector elements determined by `vl` and the mask register.
+
+## Add and subtract
+
+### Single-width
+
+| Instruction | Operation |
+|---|---|
+| `vadd` | Vector add |
+| `vsub` | Vector subtract |
+| `vrsub` | Vector reverse subtract (scalar − vector) |
+
+### Widening
+
+Widening instructions produce a result twice as wide as the source elements.
+
+| Instruction | Operation |
+|---|---|
+| `vwaddu` | Widening unsigned add |
+| `vwsubu` | Widening unsigned subtract |
+| `vwadd` | Widening signed add |
+| `vwsub` | Widening signed subtract |
+
+## Integer extension
+
+| Instruction | Operation |
+|---|---|
+| `vzext` | Zero-extend narrower elements to current SEW |
+| `vsext` | Sign-extend narrower elements to current SEW |
+
+## Add-with-carry and subtract-with-borrow
+
+These instructions operate on carry/borrow bits stored in mask registers.
+
+| Instruction | Operation |
+|---|---|
+| `vadc` | Add with carry |
+| `vmadc` | Produce carry out of add |
+| `vsbc` | Subtract with borrow |
+| `vmsbc` | Produce borrow out of subtract |
+
+## Bitwise logical
+
+| Instruction | Operation |
+|---|---|
+| `vand` | Bitwise AND |
+| `vor` | Bitwise OR |
+| `vxor` | Bitwise XOR |
+
+## Bit shift
+
+### Single-width
+
+| Instruction | Operation |
+|---|---|
+| `vsll` | Logical shift left |
+| `vsrl` | Logical shift right |
+| `vsra` | Arithmetic shift right |
+
+### Narrowing right shift
+
+| Instruction | Operation |
+|---|---|
+| `vnsrl` | Narrowing logical shift right |
+| `vnsra` | Narrowing arithmetic shift right |
+
+## Comparison
+
+Comparison instructions write results into a mask (predicate) register.
+
+| Instruction | Operation |
+|---|---|
+| `vmseq` | Equal |
+| `vmsne` | Not equal |
+| `vmsltu` | Less than, unsigned |
+| `vmslt` | Less than, signed |
+| `vmsleu` | Less than or equal, unsigned |
+| `vmsle` | Less than or equal, signed |
+| `vmsgtu` | Greater than, unsigned |
+| `vmsgt` | Greater than, signed |
+
+## Min and max
+
+| Instruction | Operation |
+|---|---|
+| `vminu` | Unsigned minimum |
+| `vmin` | Signed minimum |
+| `vmaxu` | Unsigned maximum |
+| `vmax` | Signed maximum |
+
+## Multiply
+
+### Single-width
+
+| Instruction | Operation |
+|---|---|
+| `vmul` | Multiply, return low bits |
+| `vmulh` | Multiply signed, return high bits |
+| `vmulhu` | Multiply unsigned, return high bits |
+| `vmulhsu` | Multiply signed × unsigned, return high bits |
+
+### Widening
+
+| Instruction | Operation |
+|---|---|
+| `vwmul` | Widening signed multiply |
+| `vwmulu` | Widening unsigned multiply |
+| `vwmulsu` | Widening signed × unsigned multiply |
+
+## Divide and remainder
+
+| Instruction | Operation |
+|---|---|
+| `vdivu` | Unsigned integer divide |
+| `vdiv` | Signed integer divide |
+| `vremu` | Unsigned remainder |
+| `vrem` | Signed remainder |
+
+## Multiply-add
+
+### Single-width
+
+| Instruction | Operation |
+|---|---|
+| `vmacc` | Multiply-accumulate: `vd = vd + vs1 × vs2` |
+| `vnmsac` | Negated multiply-subtract: `vd = vd − vs1 × vs2` |
+| `vmadd` | Multiply-add (destination as multiplier): `vd = vs1 × vd + vs2` |
+| `vnmsub` | Negated multiply-subtract (dest as multiplier): `vd = vs2 − vs1 × vd` |
+
+### Widening
+
+| Instruction | Operation |
+|---|---|
+| `vwmaccu` | Widening unsigned multiply-accumulate |
+| `vwmacc` | Widening signed multiply-accumulate |
+| `vwmaccsu` | Widening signed × unsigned multiply-accumulate |
+| `vwmaccus` | Widening unsigned × signed multiply-accumulate |
+
+## Merge and move
+
+| Instruction | Operation |
+|---|---|
+| `vmerge` | Merge two sources element-wise using a mask |
+| `vmv` | Copy scalar or vector register to vector register |
+| `vmv<nr>r` | Whole-register move (`<nr>` = 1, 2, 4, or 8 registers) |
+
+## Fixed-point arithmetic
+
+### Saturating add and subtract
+
+| Instruction | Operation |
+|---|---|
+| `vsaddu` | Unsigned saturating add |
+| `vsadd` | Signed saturating add |
+| `vssubu` | Unsigned saturating subtract |
+| `vssub` | Signed saturating subtract |
+
+### Averaging add and subtract
+
+| Instruction | Operation |
+|---|---|
+| `vaaddu` | Unsigned averaging add |
+| `vaadd` | Signed averaging add |
+| `vasubu` | Unsigned averaging subtract |
+| `vasub` | Signed averaging subtract |
+
+### Fractional multiply and scaling shift
+
+| Instruction | Operation |
+|---|---|
+| `vsmul` | Fractional multiply with rounding and saturation |
+| `vssrl` | Scaling logical shift right |
+| `vssra` | Scaling arithmetic shift right |
+
+### Narrowing fixed-point clip
+
+| Instruction | Operation |
+|---|---|
+| `vnclipu` | Unsigned narrowing fixed-point clip |
+| `vnclip` | Signed narrowing fixed-point clip |
+
+<Note>
+Ara's maximum element width is **ELEN = 64 bits**. All integer arithmetic instructions operate on elements up to 64-bit wide. Widening operations starting from 32-bit sources produce 64-bit results, which is the widest supported element size.
+</Note>

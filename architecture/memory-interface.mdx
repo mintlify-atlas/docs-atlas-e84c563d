@@ -1,0 +1,84 @@
+---
+title: "Ara Memory Interface: AXI4 and MMU Integration"
+description: "How Ara's VLSU uses AXI4 for memory access, integrates with CVA6's MMU for virtual address translation, and handles vector memory exceptions."
+---
+
+Ara's Vector Load/Store Unit (`vlsu`) is the sole memory-facing subsystem of the vector processor. It issues all vector memory operations as AXI4 transactions over a wide data bus, completely independently of CVA6's scalar load/store unit. The VLSU owns the AR, AW, W, R, and B channels; the scalar core never shares this bus path. An internal `axi_cut` register slice decouples timing between the VLSU and the downstream interconnect.
+
+## AXI Interface Parameters
+
+The width of the AXI interface is configured at elaboration time via two top-level parameters defined in `ara.sv` and `ara_system.sv`:
+
+| Parameter | Source | Typical Value |
+|---|---|---|
+| `AxiAddrWidth` | `ara_system.sv:32` | 64 bits |
+| `AxiNarrowDataWidth` | `ara_system.sv:34` | 64 bits (CVA6 scalar bus) |
+| `AxiWideDataWidth` | `ara_system.sv:35` | `64 × NrLanes / 2` bits |
+| `AxiDataWidth` (Ara) | `ara.sv:33` | Equal to `AxiWideDataWidth` |
+
+The wide data bus scales with the number of lanes. For a 4-lane configuration the wide bus is 128 bits; for 16 lanes it reaches 512 bits. CVA6 retains its own narrow 64-bit AXI port.
+
+<Note>
+`NrLanes` must be a power of two between 1 and `MaxNrLanes` (16). The wide bus width is derived automatically and must not be set independently.
+</Note>
+
+## Virtual Memory and OS Support
+
+When the `OSSupport` parameter is set to `1` (the default in `ara.sv:13`), the VLSU integrates with CVA6's SV39 MMU for virtual-to-physical address translation.
+
+Address translation is performed inside the `addrgen` submodule. Before issuing each AXI AR or AW request, `addrgen` sends a page-table-walk request (`mmu_ptw_req_o`) to CVA6's MMU and waits for the response (`mmu_ptw_resp_i`). Because AXI4 bursts are constrained to stay within a single 4 KiB page, each burst requires at most one translation.
+
+**Fault-only-first loads** (`vleff`) receive special treatment: the first element is always checked; subsequent element faults are suppressed and `vl` is truncated at the faulting element instead of raising a trap. The `fof_first_valid_q` flag in `addrgen` tracks whether the first valid translation has already completed.
+
+Detected exceptions — page faults, misaligned accesses, and store permission violations — are aggregated by `vlsu` and reported to the CVA6 commit stage:
+
+```systemverilog
+assign lsu_current_burst_exception_o =
+    stu_current_burst_exception | ldu_current_burst_exception;
+```
+
+<Warning>
+When `OSSupport = 0` (bare-metal mode), all addresses are treated as physical. Page faults and SV39 permission checks are disabled. Do not enable OS-level software on a configuration built without `OSSupport`.
+</Warning>
+
+## Supported Memory Operations
+
+| Operation | Access Pattern | AXI Transactions |
+|---|---|---|
+| Unit-strided load/store (`vle`, `vse`) | Contiguous | Merged into long AXI bursts (max 256 beats, 4 KiB page boundary respected) |
+| Strided load/store (`vlse`, `vsse`) | Fixed stride | One AXI transaction per element |
+| Indexed load/store (`vlxe`, `vsxe`) | Gather/scatter | One AXI transaction per element; front-end stalls until last element is resolved |
+| Fault-only-first load (`vleff`) | Unit-strided, trap-first | Burst with early truncation on first fault |
+| Segment load/store | Interleaved fields | Controlled by `SegSupport` parameter (`seg_support_e`) |
+| Whole-register load/store | Full register | Treated as unit-strided with fixed length |
+
+Unit-stride operations fully utilize the wide data bus. Strided and indexed patterns issue narrower, per-element transactions and are bandwidth-limited by element size.
+
+## VLSU Submodules
+
+The VLSU is composed of four SystemVerilog modules under `hardware/src/vlsu/`:
+
+| File | Role |
+|---|---|
+| `vlsu.sv` | Top-level wrapper; instantiates the three units below and the `axi_cut` slice |
+| `addrgen.sv` | Address generator; runs two FSMs (instruction and AXI), manages MMU requests, builds AR/AW beats, queues requests via `fifo_v3` |
+| `vldu.sv` | Vector Load Unit; receives AXI R-channel beats, shuffles data by element size (`vsew`), writes to per-lane VRF result queues |
+| `vstu.sv` | Vector Store Unit; reads per-lane operand registers, constructs AXI W payloads with byte strobes, tracks AXI B responses |
+
+## AXI Invalidation Filter
+
+When Ara performs a DMA-style write visible to CVA6's L1 data cache, stale cache lines must be invalidated. The `axi_inval_filter` module (`hardware/src/axi_inval_filter.sv`) sits on the AXI AW channel and issues single cache-line invalidations for each observed write burst. All other AXI channels are passed through transparently.
+
+```systemverilog
+// axi_inval_filter.sv – listens to AW channel, issues cacheline invalidations
+module axi_inval_filter #(
+    parameter int unsigned MaxTxns,     // max outstanding AXI write bursts
+    parameter int unsigned AddrWidth,
+    parameter int unsigned L1LineWidth,
+    ...
+)
+```
+
+<Note>
+The invalidation filter is enabled via its `en_i` signal. It must be enabled whenever Ara and CVA6 share a coherent L1 cache hierarchy; disabling it in such configurations will cause stale reads.
+</Note>

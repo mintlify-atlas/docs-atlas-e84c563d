@@ -1,0 +1,87 @@
+---
+title: "Vector Load and Store Instructions Supported by Ara"
+description: "Complete reference of RVV 1.0 vector memory instructions in Ara: unit-strided, strided, indexed, fault-only-first, segment, and whole-register loads and stores."
+---
+
+Ara implements the full set of RVV 1.0 vector memory instructions, covering all standard access patterns: unit-strided, strided, indexed, and segment loads and stores, as well as fault-only-first and whole-register variants. All memory instructions respect the current `vtype` and `vl` configuration.
+
+## Unit-strided loads and stores
+
+Unit-strided instructions access consecutive memory locations with no gap between elements.
+
+| Instruction | Operation |
+|---|---|
+| `vle8.v`, `vle16.v`, `vle32.v`, `vle64.v` | Unit-strided load (EEW 8/16/32/64-bit) |
+| `vse8.v`, `vse16.v`, `vse32.v`, `vse64.v` | Unit-strided store (EEW 8/16/32/64-bit) |
+| `vl1r.v` | Whole-register unit-strided load (1 register) |
+| `vs1r.v` | Whole-register unit-strided store (1 register) |
+
+## Strided loads and stores
+
+Strided instructions access memory with a constant byte stride between elements, which may be positive, negative, or zero.
+
+| Instruction | Operation |
+|---|---|
+| `vlse8.v`, `vlse16.v`, `vlse32.v`, `vlse64.v` | Strided load (EEW 8/16/32/64-bit) |
+| `vsse8.v`, `vsse16.v`, `vsse32.v`, `vsse64.v` | Strided store (EEW 8/16/32/64-bit) |
+
+## Indexed loads and stores
+
+Indexed instructions use a vector of offsets to compute per-element addresses, enabling scatter/gather memory access patterns.
+
+| Instruction | Operation |
+|---|---|
+| `vluxei8.v`, `vluxei16.v`, `vluxei32.v`, `vluxei64.v` | Indexed unordered load |
+| `vloxei8.v`, `vloxei16.v`, `vloxei32.v`, `vloxei64.v` | Indexed ordered load |
+| `vsuxei8.v`, `vsuxei16.v`, `vsuxei32.v`, `vsuxei64.v` | Indexed unordered store |
+| `vsoxei8.v`, `vsoxei16.v`, `vsoxei32.v`, `vsoxei64.v` | Indexed ordered store |
+
+The `u` (unordered) variants allow the implementation to access elements in any order. The `o` (ordered) variants guarantee element-order access, which matters when addresses alias.
+
+## Fault-only-first loads
+
+Fault-only-first loads allow the first element to trap on a memory fault while suppressing faults for subsequent elements. The hardware reduces `vl` to the number of elements successfully loaded.
+
+| Instruction | Operation |
+|---|---|
+| `vle8ff.v`, `vle16ff.v`, `vle32ff.v`, `vle64ff.v` | Unit-strided fault-only-first load |
+
+## Segment loads and stores
+
+Segment instructions transfer multiple fields (segments) of a structure-of-arrays layout in a single instruction. `<nf>` is the number of fields (1–8) and `<eew>` is the element width per field.
+
+### Unit-strided segment
+
+| Instruction | Operation |
+|---|---|
+| `vlseg<nf>e<eew>.v` | Unit-strided segment load |
+| `vsseg<nf>e<eew>.v` | Unit-strided segment store |
+
+### Strided segment
+
+| Instruction | Operation |
+|---|---|
+| `vlsseg<nf>e<eew>.v` | Strided segment load |
+| `vssseg<nf>e<eew>.v` | Strided segment store |
+
+### Indexed segment
+
+| Instruction | Operation |
+|---|---|
+| `vluxseg<nf>ei<eew>.v` | Indexed unordered segment load |
+| `vloxseg<nf>ei<eew>.v` | Indexed ordered segment load |
+| `vsuxseg<nf>ei<eew>.v` | Indexed unordered segment store |
+| `vsoxseg<nf>ei<eew>.v` | Indexed ordered segment store |
+
+## Whole-register loads and stores
+
+Whole-register instructions transfer one or more complete vector registers without interpreting element type or masking.
+
+| Instruction | Operation |
+|---|---|
+| `vl<nf>re<eew>.v` | Whole-register load (`<nf>` registers, EEW hint `<eew>`) |
+| `vs<nf>r.v` | Whole-register store (`<nf>` registers) |
+
+<Note>
+The `<eew>` placeholder in instruction mnemonics refers to the effective element width in bits. Ara supports EEW values of **8, 16, 32, and 64** for all applicable load and store variants. The `<nf>` placeholder (number of fields/registers) ranges from 1 to 8 for segment instructions and from 1 to 8 for whole-register instructions, subject to register group alignment constraints.
+</Note>

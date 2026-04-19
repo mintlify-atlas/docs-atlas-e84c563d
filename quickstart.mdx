@@ -1,80 +1,179 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: "Get Started with Ara: Clone, Build, and Simulate"
+description: "Set up Ara from scratch: clone submodules, build the RISC-V LLVM toolchain, configure lanes, and run your first Verilator RTL simulation."
 ---
 
-## Get started in three steps
+This guide walks you through everything you need to go from a fresh checkout of the Ara repository to a running RTL simulation. By the end you will have a working RISC-V LLVM toolchain, a patched Spike ISA simulator, a Verilator build, and a Verilator simulation of the `hello_world` application on the Ara vector processor.
 
-Get your documentation site running locally and make your first customization.
+<Tip>
+  Use a **2-lane configuration** (`config=2_lanes`) for faster Verilator compile and simulation times during development. Switch to `4_lanes` or larger only when you need to evaluate lane-count-dependent behaviour or performance.
+</Tip>
 
-### Step 1: Set up your local environment
+<Steps>
+  <Step title="Clone the repository with submodules">
+    Clone the Ara repository and initialise all required submodules. Large toolchain submodules (`riscv-gnu-toolchain`, `newlib`, `riscv-llvm`) are not checked out automatically by `git clone --recursive` and must be fetched explicitly via the Makefile target.
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash
+    git clone https://github.com/pulp-platform/ara.git
+    cd ara
+    make git-submodules
+    ```
 
-### Step 2: Deploy your changes
+    If the upstream path of any submodule changes (for example after a fork reorganisation), re-synchronise the pointer before updating:
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    ```bash
+    git submodule sync --recursive
+    ```
+  </Step>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+  <Step title="Install system dependencies">
+    The toolchain and simulator builds require several host packages. Install them before proceeding. The exact package names below are for Debian/Ubuntu; adapt as needed for other distributions.
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    **For the RISC-V toolchains (GCC and LLVM):**
 
-### Step 3: Go live
+    ```bash
+    sudo apt-get install libmpc-dev ninja-build
+    ```
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    **For Verilator:**
+
+    ```bash
+    sudo apt-get install libelf-dev help2man zlibc zlib1g zlib1g-dev \
+      libfl-dev libfl2 flex
+    # Also required for kernel headers (adjust the kernel version):
+    sudo apt-get install linux-headers-$(uname -r)
+    ```
+
+    <Note>
+      The package list above is non-exhaustive and reflects dependencies reported by users across different host environments. Some packages may already be present on your system or may not be required. If a package name is unavailable, skip it and re-run the build to identify which specific library is missing.
+    </Note>
+  </Step>
+
+  <Step title="Build the RISC-V LLVM toolchain">
+    Ara requires an LLVM toolchain with full RVV 1.0 support. The toolchain submodule (`toolchain/riscv-llvm`) contains the patched LLVM sources. Building takes 30–60 minutes depending on your machine.
+
+    ```bash
+    make toolchain-llvm
+    ```
+
+    The toolchain is installed under `install/riscv-llvm/`. The build process compiles LLVM/Clang, then newlib (the C runtime), then the RISC-V compiler-rt runtime library.
+  </Step>
+
+  <Step title="Build the Spike ISA simulator">
+    Ara uses a patched version of the Spike RISC-V ISA simulator (`toolchain/riscv-isa-sim`) that correctly models RVV 1.0 behaviour, including the `vcsr` CSR semantics.
+
+    ```bash
+    make riscv-isa-sim
+    ```
+
+    <Warning>
+      There are known dynamic linking issues when building Spike with newer versions of GCC/G++ (above ~7.2.0). If you encounter errors related to `libstdc++` or undefined symbols at link time, build with the static C++ runtime instead:
+
+      ```bash
+      make riscv-isa-sim LDFLAGS="-static-libstdc++"
+      ```
+
+      Spike was verified to build successfully with gcc/g++ **7.2.0**.
+    </Warning>
+  </Step>
+
+  <Step title="Build Verilator">
+    Ara's RTL simulation flow uses a bundled version of Verilator v4.106 (`toolchain/verilator`). Building the Verilator binary from source is required because the system-installed version is typically incompatible.
+
+    ```bash
+    make verilator
+    ```
+
+    The Verilator binary is installed under `install/verilator/bin/`.
+  </Step>
+
+  <Step title="Choose a configuration">
+    Ara's hardware parameters are controlled by a configuration file in the `config/` directory. Available configurations differ by lane count:
+
+    | Configuration | Lanes | VLEN (bits) |
+    |---------------|-------|-------------|
+    | `2_lanes`     | 2     | 4096        |
+    | `4_lanes`     | 4     | 4096        |
+    | `8_lanes`     | 8     | 4096        |
+    | `16_lanes`    | 16    | 4096        |
+
+    The `default` configuration maps to `4_lanes`. Select a different configuration using either method:
+
+    ```bash
+    # Option A: export for the current shell session
+    export ARA_CONFIGURATION=2_lanes
+
+    # Option B: prepend to individual make commands
+    config=2_lanes make <target>
+    ```
+
+    Run `make clean` after switching configurations to avoid stale build artefacts.
+  </Step>
+
+  <Step title="Build an application">
+    The `apps/` directory contains example programs and benchmarks. Build the `hello_world` binary (or any other application) using the applications Makefile:
+
+    ```bash
+    cd apps
+    make bin/hello_world
+    ```
+
+    The compiled binary is placed at `apps/bin/hello_world`. You can also run the application in Spike for a quick functional check before RTL simulation:
+
+    ```bash
+    make bin/hello_world.spike
+    make spike-run-hello_world
+    ```
+  </Step>
+
+  <Step title="Run a Verilator RTL simulation">
+    Before running Verilator simulations for the first time, you must check out the hardware IP dependencies and apply patches. The patch step is required **once** per checkout (or after re-running `make checkout`).
+
+    ```bash
+    cd hardware
+
+    # Install Bender and check out all hardware IPs
+    make checkout
+
+    # Apply Verilator compatibility patches (only needed once)
+    make apply-patches
+    ```
+
+    <Note>
+      The `make apply-patches` step is required only once. You must repeat it only if the hardware IPs are deleted and re-checked out via `make checkout`.
+    </Note>
+
+    Verilate the design and run the simulation:
+
+    ```bash
+    # Compile the Verilator model (only needed when RTL changes)
+    make verilate
+
+    # Run the simulation with the hello_world binary
+    app=hello_world make simv
+    ```
+
+    To generate waveform traces in FST format (viewable with GTKWave), add `trace=1`:
+
+    ```bash
+    app=hello_world trace=1 make simv
+    ```
+  </Step>
+</Steps>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Architecture overview" icon="sitemap" href="/architecture/overview">
+    Understand Ara's internal structure: lanes, dispatcher, sequencer, VLSU, SLDU, and MASKU.
+  </Card>
+  <Card title="RTL simulation guide" icon="play" href="/simulation/rtl-simulation">
+    Run ModelSim simulations, use ideal dispatcher mode, and generate VCD traces for power analysis.
+  </Card>
+  <Card title="Building applications" icon="code" href="/software/building-apps">
+    Compile and run the full benchmark suite, including fmatmul, fconv3d, FFT, and more.
+  </Card>
+  <Card title="Configuration parameters" icon="sliders" href="/configuration/parameters">
+    Reference for all hardware parameters: lane count, VLEN, FPU options, and build-time knobs.
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

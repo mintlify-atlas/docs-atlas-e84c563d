@@ -1,0 +1,52 @@
+---
+title: "Vector Reduction Operations in Ara"
+description: "All RVV 1.0 vector reduction instructions in Ara: integer reductions (sum, min, max, logical ops), widening integer, and floating-point reductions."
+---
+
+Reduction instructions reduce an entire vector register to a single scalar result, which is written into element 0 of the destination register. The source operand `vs1` provides a scalar identity value in its element 0 that seeds the reduction. All active elements (as determined by `vl` and the mask) participate in the operation.
+
+## Integer reductions
+
+### Single-width
+
+| Instruction | Operation |
+|---|---|
+| `vredsum` | Sum of all elements |
+| `vredmaxu` | Unsigned maximum element |
+| `vredmax` | Signed maximum element |
+| `vredminu` | Unsigned minimum element |
+| `vredmin` | Signed minimum element |
+| `vredand` | Bitwise AND of all elements |
+| `vredor` | Bitwise OR of all elements |
+| `vredxor` | Bitwise XOR of all elements |
+
+### Widening integer reductions
+
+Widening reductions accumulate into a destination element that is twice as wide as the source elements.
+
+| Instruction | Operation |
+|---|---|
+| `vwredsumu` | Widening unsigned sum reduction |
+| `vwredsum` | Widening signed sum reduction |
+
+## Floating-point reductions
+
+### Single-width
+
+| Instruction | Operation |
+|---|---|
+| `vfredusum` | Unordered floating-point sum |
+| `vfredosum` | Ordered floating-point sum |
+| `vfredmin` | Floating-point minimum |
+| `vfredmax` | Floating-point maximum |
+
+### Widening floating-point reductions
+
+| Instruction | Operation |
+|---|---|
+| `vfwredusum` | Widening unordered floating-point sum |
+| `vfwredosum` | Widening ordered floating-point sum |
+
+<Note>
+`vfredosum` and `vfwredosum` perform an **ordered** sum, meaning elements are accumulated strictly in index order. This preserves IEEE 754 reproducibility but limits parallelism. `vfredusum` and `vfwredusum` perform an **unordered** sum, allowing the implementation to reorder additions for better throughput at the cost of result reproducibility across runs or hardware configurations.
+</Note>

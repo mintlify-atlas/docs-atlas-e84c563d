@@ -1,0 +1,161 @@
+---
+title: "Vector Floating-Point Instructions Supported by Ara"
+description: "All RVV 1.0 floating-point instructions in Ara: FP16/32/64 arithmetic, fused multiply-add, square root, type conversions, and widening variants."
+---
+
+Ara supports vector floating-point arithmetic across multiple precisions: half-precision (FP16), single-precision (FP32), and double-precision (FP64). The available precision levels depend on the hardware `FPUSupport` parameter set at synthesis time. All floating-point instructions operate element-wise on the active vector elements defined by `vl` and the optional mask register.
+
+## Add and subtract
+
+### Single-width
+
+| Instruction | Operation |
+|---|---|
+| `vfadd` | Floating-point add |
+| `vfsub` | Floating-point subtract |
+| `vfrsub` | Floating-point reverse subtract (scalar − vector) |
+
+### Widening
+
+| Instruction | Operation |
+|---|---|
+| `vfwadd` | Widening floating-point add (narrow + narrow → wide) |
+| `vfwsub` | Widening floating-point subtract (narrow − narrow → wide) |
+| `vfwadd.w` | Widening floating-point add (wide + narrow → wide) |
+| `vfwsub.w` | Widening floating-point subtract (wide − narrow → wide) |
+
+## Multiply and divide
+
+### Single-width
+
+| Instruction | Operation |
+|---|---|
+| `vfmul` | Floating-point multiply |
+| `vfdiv` | Floating-point divide |
+| `vfrdiv` | Floating-point reverse divide (scalar ÷ vector) |
+
+### Widening
+
+| Instruction | Operation |
+|---|---|
+| `vfwmul` | Widening floating-point multiply |
+
+## Fused multiply-add
+
+### Single-width
+
+| Instruction | Operation |
+|---|---|
+| `vfmacc` | `vd = vd + vs1 × vs2` |
+| `vfnmacc` | `vd = −vd − vs1 × vs2` |
+| `vfmsac` | `vd = vd − vs1 × vs2` |
+| `vfnmsac` | `vd = −vd + vs1 × vs2` |
+| `vfmadd` | `vd = vs1 × vd + vs2` |
+| `vfnmadd` | `vd = −vs1 × vd − vs2` |
+| `vfmsub` | `vd = vs1 × vd − vs2` |
+| `vfnmsub` | `vd = −vs1 × vd + vs2` |
+
+### Widening fused multiply-add
+
+| Instruction | Operation |
+|---|---|
+| `vfwmacc` | Widening: `vd = vd + vs1 × vs2` |
+| `vfwnmacc` | Widening: `vd = −vd − vs1 × vs2` |
+| `vfwmsac` | Widening: `vd = vd − vs1 × vs2` |
+| `vfwnmsac` | Widening: `vd = −vd + vs1 × vs2` |
+
+## Square root
+
+| Instruction | Operation |
+|---|---|
+| `vfsqrt` | Floating-point square root |
+
+## Min and max
+
+| Instruction | Operation |
+|---|---|
+| `vfmin` | Floating-point minimum |
+| `vfmax` | Floating-point maximum |
+
+## Sign injection
+
+| Instruction | Operation |
+|---|---|
+| `vfsgnj` | Copy sign from source to magnitude |
+| `vfsgnjn` | Copy negated sign from source to magnitude |
+| `vfsgnjx` | XOR signs from both sources |
+
+## Classify
+
+| Instruction | Operation |
+|---|---|
+| `vfclass` | Classify floating-point elements (NaN, infinity, zero, etc.) |
+
+## Merge and move
+
+| Instruction | Operation |
+|---|---|
+| `vfmerge` | Merge two FP sources element-wise using a mask |
+| `vfmv` | Move scalar FP value into all active vector elements |
+
+## Compare
+
+Comparison instructions write results into a mask register.
+
+| Instruction | Operation |
+|---|---|
+| `vmfeq` | Equal |
+| `vmfne` | Not equal |
+| `vmflt` | Less than |
+| `vmfle` | Less than or equal |
+| `vmfgt` | Greater than |
+| `vmfge` | Greater than or equal |
+
+## Type conversions
+
+### Single-width floating-point / integer conversions
+
+| Instruction | Operation |
+|---|---|
+| `vfcvt.xu.f` | FP → unsigned integer |
+| `vfcvt.x.f` | FP → signed integer |
+| `vfcvt.rtz.xu.f` | FP → unsigned integer (round toward zero) |
+| `vfcvt.rtz.x.f` | FP → signed integer (round toward zero) |
+| `vfcvt.f.xu` | Unsigned integer → FP |
+| `vfcvt.f.x` | Signed integer → FP |
+
+### Widening conversions
+
+| Instruction | Operation |
+|---|---|
+| `vfwcvt.xu.f` | Narrow FP → wide unsigned integer |
+| `vfwcvt.x.f` | Narrow FP → wide signed integer |
+| `vfwcvt.rtz.xu.f` | Narrow FP → wide unsigned integer (round toward zero) |
+| `vfwcvt.rtz.x.f` | Narrow FP → wide signed integer (round toward zero) |
+| `vfwcvt.f.xu` | Narrow unsigned integer → wide FP |
+| `vfwcvt.f.x` | Narrow signed integer → wide FP |
+| `vfwcvt.f.f` | Narrow FP → wide FP |
+
+### Narrowing conversions
+
+| Instruction | Operation |
+|---|---|
+| `vfncvt.xu.f` | Wide FP → narrow unsigned integer |
+| `vfncvt.x.f` | Wide FP → narrow signed integer |
+| `vfncvt.rtz.xu.f` | Wide FP → narrow unsigned integer (round toward zero) |
+| `vfncvt.rtz.x.f` | Wide FP → narrow signed integer (round toward zero) |
+| `vfncvt.f.xu` | Wide unsigned integer → narrow FP |
+| `vfncvt.f.x` | Wide signed integer → narrow FP |
+| `vfncvt.f.f` | Wide FP → narrow FP |
+| `vfncvt.rod.f.f` | Wide FP → narrow FP (round-odd mode) |
+
+## Reciprocal estimates
+
+| Instruction | Operation |
+|---|---|
+| `vfrec7` | 7-bit reciprocal estimate |
+| `vfrsqrt7` | 7-bit reciprocal square-root estimate |
+
+<Note>
+Which floating-point precisions are available at runtime depends on the **`FPUSupport`** hardware parameter configured when Ara is synthesized. A typical configuration enables FP32 and FP64; FP16 support is optional. Attempting to use an unsupported precision will raise an illegal-instruction exception.
+</Note>

@@ -1,0 +1,90 @@
+---
+title: "Vector Lanes: Ara's Parallel Processing Units"
+description: "Each Ara vector lane holds a VRF slice, SIMD FPU, ALU, and multiplier. Understand how lanes scale throughput and how operands flow through the pipeline."
+---
+
+A vector lane in Ara is a self-contained processing slice that combines a portion of the vector register file with a full complement of integer and floating-point arithmetic units. Ara instantiates between 2 and 16 lanes (always a power of two, up to `MaxNrLanes = 16`), and every lane operates in lockstep on the same vector instruction, each processing a different interleaved segment of the vector register file. Adding lanes directly multiplies both storage bandwidth and compute throughput: a configuration with `NrLanes = 8` delivers twice the throughput of `NrLanes = 4` at the same clock frequency. Each lane is identified at runtime by a `lane_id_i` signal of width `idx_width(NrLanes)` bits.
+
+---
+
+## Lane Internals
+
+The `lane` module (`hardware/src/lane/lane.sv`) instantiates the following submodules:
+
+| File | Description |
+|------|-------------|
+| `vector_regfile.sv` | The VRF slice for this lane. Stores `VRFSizePerLane = MaxVLenPerLane × 32` bits across 32 vector registers. |
+| `simd_alu.sv` | SIMD ALU for integer arithmetic and logic operations (ADD, SUB, AND, OR, XOR, shifts, comparisons, etc.). |
+| `simd_mul.sv` | SIMD integer multiplier. Latency: 1 cycle for EW64/EW32/EW16, 0 cycles for EW8. |
+| `simd_div.sv` | SIMD integer divider and remainder unit (`vdivu`, `vdiv`, `vremu`, `vrem`). |
+| `vmfpu.sv` | Multi-precision vector FPU supporting FP16, FP32, and FP64 (and optionally FP16alt and FP8) via the `FPUSupport` parameter. Also handles FP reductions and FP comparisons. |
+| `valu.sv` | Top-level integer ALU stage that wraps `simd_alu.sv` and `simd_mul.sv` into the lane pipeline. |
+| `vector_fus_stage.sv` | Multiplexes the functional unit result buses and manages result writeback into the VRF. |
+| `operand_queue.sv` | Per-operand FIFO that buffers elements read from the VRF until the functional unit is ready to consume them. |
+| `operand_queues_stage.sv` | Top-level stage instantiating and connecting all operand queues for a lane (vs1, vs2, vd_op, mask). |
+| `operand_requester.sv` | Reads operand elements from the VRF in element order and pushes them into the appropriate operand queue. Handles EEW conversions and scaling. |
+| `lane_sequencer.sv` | Per-lane instruction scheduler. Accepts `pe_req_t` from the main sequencer and drives the operand requester and functional units for each in-flight instruction. |
+| `fixed_p_rounding.sv` | Fixed-point rounding logic used for `vssrl`, `vssra`, `vnclip`, `vnclipu`, and `vsmul`. Implements the rounding modes controlled by `vxrm`. |
+| `power_gating_generic.sv` | Generic power gating cell wrapper enabling per-lane power gating when the lane is idle. |
+
+---
+
+## Vector Register File (VRF)
+
+Each lane holds an independent, single-ported slice of the full vector register file. The layout is determined by three derived parameters (computed in both `ara.sv` and `lane.sv`):
+
+| Parameter | Formula | Meaning |
+|-----------|---------|---------|
+| `MaxVLenPerLane` | `VLEN / NrLanes` | Maximum number of bits that a single vector register can contribute to this lane |
+| `VRFSizePerLane` | `MaxVLenPerLane × 32` | Total VRF capacity per lane in bits (covers all 32 architectural vector registers) |
+| `VRFBSizePerLane` | `MaxVLenBPerLane × 32` | Total VRF capacity per lane in bytes |
+| `vaddr_t` | `logic [$clog2(VRFBSizePerLane)-1:0]` | Address type for indexing individual bytes within the lane's VRF |
+
+For a typical configuration of `NrLanes = 4` and `VLEN = 4096` bits:
+- `MaxVLenPerLane = 1024` bits
+- `VRFSizePerLane = 32768` bits = 4 KiB per lane
+- `VRFBSizePerLane = 4096` bytes per lane
+
+Vector register addresses (`vaddr_t`) index bytes within the lane's VRF slice. The `operand_requester` computes these addresses based on the vector register number, the element index, and the effective element width (EEW).
+
+---
+
+## Operand Flow
+
+Operand flow through a lane follows a producer–consumer pipeline with explicit backpressure:
+
+1. **Request** — `lane_sequencer` receives a `pe_req_t` from the main sequencer. It schedules operand reads for each source register (`vs1`, `vs2`, `vd_op`, and the mask register `v0`) by driving the `operand_requester`.
+2. **Read** — `operand_requester` issues sequential read requests to `vector_regfile` at the lane's native 64-bit (`elen_t`) granularity. Each read yields one 64-bit word, which may contain from one FP64 element to eight INT8 elements.
+3. **Queue** — Each read word is pushed into the corresponding `operand_queue`. These queues decouple the VRF read bandwidth from the functional unit's consumption rate and handle optional format conversions (e.g., widening, sign extension) via the `opqueue_conversion_e` field in `ara_req_t`.
+4. **Execute** — The functional unit (ALU, MFPU, or divider) pops elements from its operand queues and produces a result word each cycle it is active.
+5. **Writeback** — Result words are written back into the lane's VRF by `vector_fus_stage`. External units (VLSU, SLDU, MASKU) write results into the lane VRF directly via dedicated `*_result_req_o` / `*_result_gnt_i` / `*_result_wdata_o` handshake ports.
+
+The global hazard table (`global_hazard_table_i`, an `NrVInsn × NrVInsn` matrix) from the main sequencer prevents operand requesters from issuing reads for a register that is still being written by an earlier in-flight instruction.
+
+---
+
+## Lane Interconnects
+
+Every lane exports and receives data buses to and from all three all-to-all units. These are full `NrLanes`-wide arrays of 64-bit (`elen_t`) buses — one entry per lane:
+
+| Direction | Interface | Purpose |
+|-----------|-----------|---------|
+| Lane → VLSU | `stu_operand_o` / `stu_operand_valid_o` | Store data for vector store operations |
+| Lane → SLDU | `sldu_addrgen_operand_o` / `sldu_operand_valid_o` | Slide source data and address-generation operands |
+| Lane → MASKU | `mask_operand_o[NrMaskFUnits+2-1:0]` | Multiple mask operand buses (one per functional unit type) |
+| VLSU → Lane | `ldu_result_req_i` / `ldu_result_wdata_i` / `ldu_result_gnt_o` | Load result writeback |
+| SLDU → Lane | `sldu_result_req_i` / `sldu_result_wdata_i` / `sldu_result_gnt_o` | Slide result writeback |
+| MASKU → Lane | `masku_result_req_i` / `masku_result_wdata_i` / `masku_result_gnt_o` | Mask unit result writeback |
+| MASKU → Lane VFUs | `mask_i` / `mask_valid_i` / `mask_ready_o` | Predication mask distribution (byte-strobe granularity) |
+
+The SLDU also drives a `sldu_mux_sel_o` signal (`sldu_mux_e`: `NO_RED`, `ALU_RED`, `MFPU_RED`) to multiplex between normal slide operands and reduction operands coming back from the ALU or MFPU.
+
+---
+
+## Fixed-Point Rounding
+
+`fixed_p_rounding.sv` implements the four rounding modes defined by the RVV specification for fixed-point arithmetic instructions (`vssrl`, `vssra`, `vnclip`, `vnclipu`, `vsmul`). The active rounding mode is selected by the `vxrm` CSR, which the dispatcher broadcasts to all lanes via the `alu_vxrm_i` port. Saturation overflow events set the per-lane `vxsat_flag_o`, which the dispatcher collects and ORs into the global `vxsat` CSR.
+
+<Note>
+**Per-lane power gating** — `power_gating_generic.sv` provides a technology-independent power gating wrapper that can be instantiated around idle lane logic. When all in-flight instructions have completed and no new instruction targets a given lane, the power gating cell can cut the lane's supply, reducing static power. This feature is especially useful in low-NrLanes configurations that leave portions of the datapath idle.
+</Note>

@@ -1,97 +1,147 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Ara Vector Processor: Open-Source RISC-V RVV 1.0 Vector Unit"
+description: "Ara is an open-source 64-bit RISC-V RVV 1.0 vector coprocessor for high-performance, energy-efficient data-parallel computing in embedded SoC designs."
 ---
 
-## Setting up
+Ara is an open-source vector processing unit developed by the [PULP Platform](https://pulp-platform.org/) at ETH Zurich and the University of Bologna. It implements the **RISC-V Vector Extension v1.0 (RVV)** and operates as a coprocessor to the CVA6 scalar core, delivering scalable vector compute for signal processing, linear algebra, machine learning, and computer vision workloads.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Clone the repository, build the toolchain, and run your first simulation
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Architecture Overview" icon="microchip" href="/architecture/overview">
+    Understand Ara's lane-based design, functional units, and memory interface
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Configuration" icon="sliders" href="/configuration/parameters">
+    Choose lane count, VLEN, FPU support, and other hardware parameters
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Supported Instructions" icon="list-check" href="/reference/vector-loads-stores">
+    Full reference of RVV 1.0 instructions implemented in Ara
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What is Ara?
 
-Everything you need to create world-class documentation.
+Ara is a **modular, scalable vector accelerator** that plugs into RISC-V SoC designs to accelerate data-parallel workloads. It can be configured with 2, 4, 8, or 16 parallel vector lanes, each containing a slice of the vector register file, a SIMD FPU, and a SIMD ALU/multiplier.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={3}>
+  <Card title="RVV 1.0 Compliant" icon="circle-check">
+    Full compliance with the RISC-V Vector Extension specification version 1.0
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="Scalable Lanes" icon="layer-group">
+    2 to 16 parallel vector lanes, each operating on 64-bit data slices
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Multi-Precision FP" icon="calculator">
+    Supports FP16, FP32, and FP64 floating-point operations
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="AXI4 Memory" icon="database">
+    Standard AXI4 memory interface for SoC integration
   </Card>
-</Columns>
+  <Card title="FPGA Ready" icon="circuit-board">
+    Tested on VCU128 and VCU118 with bare-metal and Linux support
+  </Card>
+  <Card title="Open Source" icon="code-branch">
+    Solderpad 0.51 licensed hardware; active research and academic use
+  </Card>
+</CardGroup>
 
-## Need inspiration?
+## Get started
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Steps>
+  <Step title="Clone the repository">
+    Clone Ara with all its submodules to get the hardware sources, toolchain, and applications.
+
+    ```bash
+    git clone https://github.com/pulp-platform/ara.git
+    cd ara
+    make git-submodules
+    ```
+  </Step>
+  <Step title="Build the toolchain">
+    Build the RISC-V LLVM toolchain with RVV 1.0 support, and the Spike ISA simulator.
+
+    ```bash
+    make toolchain-llvm
+    make riscv-isa-sim
+    ```
+  </Step>
+  <Step title="Choose a configuration">
+    Select a lane configuration (default is 4 lanes with VLEN=4096 bits).
+
+    ```bash
+    export ARA_CONFIGURATION=4_lanes
+    ```
+  </Step>
+  <Step title="Run a simulation">
+    Build a sample application and simulate it using Verilator or ModelSim.
+
+    ```bash
+    cd apps && make bin/hello_world
+    cd ../hardware && app=hello_world make simv
+    ```
+  </Step>
+</Steps>
+
+## Explore the documentation
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="sitemap" href="/architecture/overview">
+    Deep dive into Ara's internal structure: lanes, dispatcher, sequencer, VLSU, SLDU, and MASKU
+  </Card>
+  <Card title="Simulation guide" icon="play" href="/simulation/rtl-simulation">
+    Run RTL simulations with ModelSim or Verilator, generate waveform traces
+  </Card>
+  <Card title="Applications & benchmarks" icon="chart-bar" href="/software/building-apps">
+    Build and run the included benchmark suite: fmatmul, fconv3d, FFT, and more
+  </Card>
+  <Card title="Hardware module reference" icon="book" href="/reference/modules/ara-top">
+    Detailed parameter and port documentation for every hardware module
+  </Card>
+</CardGroup>
+
+## Publications
+
+Ara has been published in peer-reviewed venues. If you use Ara in your research, please cite:
+
+<AccordionGroup>
+  <Accordion title="Ara: A 1-GHz+ Scalable RISC-V Vector Processor (IEEE TVLSI 2020)">
+    ```bibtex
+    @Article{Ara2020,
+      author = {Matheus Cavalcante and Fabian Schuiki and Florian Zaruba and Michael Schaffner and Luca Benini},
+      journal= {IEEE Transactions on Very Large Scale Integration (VLSI) Systems},
+      title  = {Ara: A 1-GHz+ Scalable and Energy-Efficient RISC-V Vector Processor With Multiprecision Floating-Point Support in 22-nm FD-SOI},
+      year   = {2020},
+      volume = {28},
+      number = {2},
+      pages  = {530-543},
+      doi    = {10.1109/TVLSI.2019.2950087}
+    }
+    ```
+  </Accordion>
+  <Accordion title="A New Ara for Vector Computing (IEEE ASAP 2022)">
+    ```bibtex
+    @INPROCEEDINGS{9912071,
+      author={Perotti, Matteo and Cavalcante, Matheus and Wistoff, Nils and Andri, Renzo and Cavigelli, Lukas and Benini, Luca},
+      booktitle={2022 IEEE 33rd International Conference on Application-specific Systems, Architectures and Processors (ASAP)},
+      title={A "New Ara" for Vector Computing: An Open Source Highly Efficient RISC-V V 1.0 Vector Processor Design},
+      year={2022},
+      pages={43-51},
+      doi={10.1109/ASAP54787.2022.00017}
+    }
+    ```
+  </Accordion>
+  <Accordion title="Ara2: Single- and Multi-Core Vector Processing (IEEE TC 2024)">
+    ```bibtex
+    @ARTICLE{10500752,
+      author={Perotti, Matteo and Cavalcante, Matheus and Andri, Renzo and Cavigelli, Lukas and Benini, Luca},
+      journal={IEEE Transactions on Computers},
+      title={Ara2: Exploring Single- and Multi-Core Vector Processing With an Efficient RVV 1.0 Compliant Open-Source Processor},
+      year={2024},
+      volume={73},
+      number={7},
+      pages={1822-1836},
+      doi={10.1109/TC.2024.3388896}
+    }
+    ```
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,88 @@
+---
+title: "Verilator Setup and Simulation for Ara"
+description: "Build Verilator for Ara RTL simulation, verilate the design, apply required patches, and run cycle-accurate simulations with optional waveform output."
+---
+
+Verilator compiles Ara's SystemVerilog sources to C++ and produces a fast, cycle-accurate simulation model. This page covers building Verilator from the pinned submodule, patching dependencies, and running simulations.
+
+## Building Verilator
+
+Ara requires a specific version of Verilator (v4.106), pinned as a submodule. Build it from the repository root:
+
+```bash
+make verilator
+```
+
+This installs Verilator under `install/verilator/`.
+
+## Required patches
+
+Some hardware IP dependencies need patches to be compatible with Verilator. Apply them once from the `hardware` directory:
+
+```bash
+cd hardware
+make apply-patches
+```
+
+The patch modifies the SRAM cells in `deps/tech_cells_generic` for Verilator compatibility. You only need to repeat this step if the `hardware/deps/` directory is deleted and re-populated with `make checkout`.
+
+## Verilating the design
+
+Translate the SystemVerilog sources to a C++ simulation model:
+
+```bash
+make verilate
+```
+
+This step must be run from the `hardware` directory. The compiled model is placed under `hardware/build/verilator/`.
+
+## Running simulations
+
+Run the compiled Verilator model with a named application:
+
+```bash
+app=hello_world make simv
+```
+
+To load an arbitrary ELF binary, use `preload` with a full path:
+
+```bash
+preload=/path/to/binary make simv
+```
+
+## Waveform traces
+
+Enable FST waveform capture by adding `trace=1` to both the verilate and simv steps:
+
+```bash
+trace=1 make verilate
+trace=1 app=hello_world make simv
+```
+
+Open the resulting `.fst` file with GTKWave:
+
+```bash
+gtkwave <trace_file>.fst
+```
+
+## Running RISC-V tests
+
+After verilating the design, run the full RISC-V ISA unit test suite for the vector extension:
+
+```bash
+make riscv_tests_simv
+```
+
+## rvv-bench
+
+To run the `rvv-bench` RISC-V vector instruction benchmark suite:
+
+```bash
+make rvv-bench
+make -C apps bin/rvv
+make -C hardware simv app=rvv
+```
+
+<Note>
+The Verilator testbench helpers in `hardware/tb/verilator/` are adapted from the [lowRISC](https://lowrisc.org/) project and are licensed under the Apache 2.0 license.
+</Note>

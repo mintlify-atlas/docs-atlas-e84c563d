@@ -1,0 +1,69 @@
+---
+title: "Lane Module Reference: Ara's Parallel Processing Element"
+description: "Reference for the Ara lane module: vector register file layout, SIMD FPU and ALU units, operand queues, lane sequencer, and per-lane arithmetic capabilities."
+---
+
+Each lane is an independent parallel processing element containing a VRF slice and a full set of arithmetic units. Ara instantiates `NrLanes` identical `lane` instances that operate in parallel, each processing a distinct interleaved subset of vector elements. Lanes synchronize with each other and with the shared units (VLSU, SLDU, MASKU) through global control signals from the sequencer.
+
+## Lane parameters
+
+| Parameter | Source | Description |
+|-----------|--------|-------------|
+| `NrLanes` | `ara` top-level | Total number of lanes; used to compute per-lane VRF sizing and element interleaving. |
+| `VLEN` | `ara` top-level | Total vector length in bits. |
+| `FPUSupport` | `ara` top-level | Enables FP16, FP32, and/or FP64 support inside `vmfpu`. |
+| `FPExtSupport` | `ara` top-level | Enables `vfrec7` and `vfrsqrt7` in `vmfpu`. |
+| `FixPtSupport` | `ara` top-level | Enables fixed-point rounding instructions in `simd_alu` and `fixed_p_rounding`. |
+| `CVA6Cfg` | `ara` top-level | CVA6 configuration; propagated for interface type derivation. |
+| `MaxVLenPerLane` | Derived: `VLEN / NrLanes` | Maximum elements owned by this lane, in bits. |
+| `VRFSizePerLane` | Derived: `MaxVLenPerLane × 32` | Total VRF storage per lane in bits (32 vector registers × `MaxVLenPerLane` bits each). |
+
+## Lane submodules
+
+| Module file | Purpose |
+|-------------|---------|
+| `vector_regfile.sv` | VRF slice storage. Implements a multi-bank register file holding 32 vector registers, each `MaxVLenPerLane` bits wide. Read requests are broadcast; write requests carry per-byte enables. |
+| `lane_sequencer.sv` | Per-lane instruction scheduling. Accepts `pe_req` from the global sequencer, tracks hazard metadata per operand register, and issues `vfu_operation` commands to the functional units. |
+| `operand_requester.sv` | Reads operands from the VRF. Converts lane sequencer commands into VRF read requests; enforces element-level chaining using the hazard credits provided by the global sequencer. |
+| `operand_queues_stage.sv` | Hosts all operand queues for a single lane and manages arbitration for the shared SLDU/AddrGen bus. |
+| `operand_queue.sv` | Per-functional-unit operand buffer. Buffers elements read from the VRF before they reach a functional unit, decoupling VRF access latency from FU consumption rate. |
+| `vector_fus_stage.sv` | Top-level wrapper for all functional units within a lane. Routes `vfu_operation` commands and collects results. |
+| `simd_alu.sv` | SIMD integer ALU. Executes integer arithmetic, comparison, logical, shift, and fixed-point operations on 64-bit ELEN slices at EW8, EW16, EW32, and EW64 granularities. |
+| `simd_mul.sv` | SIMD integer multiplier. Implements widening and non-widening integer multiply operations. Configurable pipeline latency per element width. |
+| `simd_div.sv` | SIMD integer divider. Implements integer divide and remainder. Multi-cycle with handshake-based flow control. |
+| `vmfpu.sv` | Multi-precision vector FPU. Supports FP16, FP32, and FP64 (controlled by `FPUSupport`). Implements compare, classify, convert, non-computational, and optionally `vfrec7`/`vfrsqrt7` (`FPExtSupport`). |
+| `fixed_p_rounding.sv` | Fixed-point rounding logic. Implements the rounding modes specified by `vxrm` for fixed-point saturating operations when `FixPtSupport = FixedPointEnable`. |
+| `power_gating_generic.sv` | Per-lane power gating wrapper. Allows unused lanes or functional units to be clock-gated when idle. |
+
+## Vector Register File
+
+Each lane holds 32 vector registers. Every register is `MaxVLenPerLane` bits wide, giving a total VRF capacity per lane of:
+
+```
+VRFSizePerLane = MaxVLenPerLane × 32 bits
+               = (VLEN / NrLanes) × 32 bits
+```
+
+Ara uses a lane-interleaved element layout: element `i` of a vector register is stored in lane `i mod NrLanes`. This ensures uniform utilization across lanes for any active vector length. When a register is reused with a different element width, the dispatcher injects reshuffle micro-ops (via SLDU) to re-encode the byte layout before the instruction executes.
+
+## Datapath
+
+Each lane operates on a 64-bit internal datapath (`ELEN = 64`, defined in `ara_pkg`). All functional units process 64-bit slices; SIMD behavior within a lane is achieved by operating on sub-64-bit elements packed into those 64-bit words.
+
+- **EW64** — one element per 64-bit word.
+- **EW32** — two elements per 64-bit word.
+- **EW16** — four elements per 64-bit word.
+- **EW8** — eight elements per 64-bit word.
+
+FPU pipeline latencies (from `ara_pkg`):
+
+| Operation | EW64 | EW32 | EW16 | EW8 |
+|-----------|------|------|------|-----|
+| Comparison | 5 cycles | 4 cycles | 3 cycles | 2 cycles |
+| Non-computational | 1 cycle | 1 cycle | 1 cycle | 1 cycle |
+| Conversion | 2 cycles | 2 cycles | 2 cycles | 2 cycles |
+| Div/Sqrt | 3 cycles | 3 cycles | 3 cycles | 3 cycles |
+
+<Note>
+Each lane exports a 64-bit `elen_t` bus to each of the all-to-all units: VLSU (for store operands and address generation indices), SLDU (for slide and reshuffle operands), and MASKU (for mask bit extraction). Every all-to-all unit therefore receives one 64-bit bus from every lane simultaneously, enabling full cross-lane data movement in a single cycle per element.
+</Note>

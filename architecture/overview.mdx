@@ -1,0 +1,124 @@
+---
+title: "Ara Architecture: Scalable RISC-V Vector Processor Design"
+description: "Top-level architecture of the Ara vector processor: lane-based parallelism, dispatcher, sequencer, and CVA6 scalar core integration explained."
+---
+
+Ara is a modular, open-source vector processing unit developed by the PULP platform at ETH Zurich and the University of Bologna. It implements the RISC-V Vector Extension 1.0 (RVV) and functions as a coprocessor to the [CVA6](https://github.com/openhwgroup/cva6) scalar RISC-V core. The design is built around a scalable, lane-parallel datapath: all vector register file storage, arithmetic, and memory operations are distributed across a configurable number of parallel vector lanes, giving Ara linear throughput scaling with lane count. Ara is parameterized at elaboration time, meaning lane count, VLEN, FPU support, and optional features such as fixed-point arithmetic and segmented memory operations can all be tuned for a given SoC target.
+
+---
+
+## System Integration
+
+The `ara_system` module is the natural integration boundary for most SoC designs. It contains both the CVA6 scalar core and the Ara vector unit, wired together through the CVA6 accelerator interface (`cva6_to_acc_t` / `acc_to_cva6_t`). CVA6 issues vector instructions to Ara via this interface and receives scalar results and exception signals back.
+
+At the next level up, `ara_soc` wraps `ara_system` with an AXI crossbar and memory subsystem. Two distinct AXI buses are present:
+
+- **Narrow AXI** — used by CVA6 for instruction fetch and scalar data access (`AxiNarrowDataWidth = 64` bits).
+- **Wide AXI** — used exclusively by Ara's Vector Load/Store Unit (VLSU) for vector memory traffic (`AxiWideDataWidth = 64 × NrLanes / 2` bits).
+
+An `axi_inval_filter` sits on Ara's wide AXI port and listens to the AXI4 AW channel to issue L1 cache-line invalidations when CVA6's cache coherency protocol is active.
+
+---
+
+## Top-Level Components
+
+<CardGroup cols={2}>
+  <Card title="Ara top-level (ara.sv)" icon="microchip">
+    The `ara` module is the top-level vector unit. It instantiates the dispatcher, sequencer, all vector lanes, the VLSU, SLDU, and MASKU, and exposes the CVA6 accelerator interface plus a single wide AXI master port.
+  </Card>
+  <Card title="Dispatcher (ara_dispatcher.sv)" icon="code-branch">
+    Fully decodes every incoming RVV instruction, maintains vector CSR state (`vl`, `vtype`, `vstart`, `vxsat`, `vxrm`), injects micro-ops for register reshuffling and segmented memory operations, and forwards decoded `ara_req_t` descriptors to the sequencer.
+  </Card>
+  <Card title="Sequencer (ara_sequencer.sv)" icon="list-check">
+    Manages up to `NrVInsn = 8` in-flight vector instructions simultaneously. Tracks per-PE instruction status with a scoreboard, resolves RAW/WAW/WAR hazards via a global hazard table, and broadcasts `pe_req_t` work orders to all processing elements.
+  </Card>
+  <Card title="Vector Lanes (lane.sv)" icon="layer-group">
+    Each lane holds a `VRFSizePerLane = MaxVLenPerLane × 32`-bit slice of the vector register file, a SIMD ALU, SIMD multiplier, SIMD divider, and a multi-precision FPU. Ara supports between 2 and 16 lanes, always a power of two.
+  </Card>
+  <Card title="VLSU (vlsu/vlsu.sv)" icon="database">
+    The Vector Load/Store Unit handles all vector memory operations. It drives Ara's wide AXI master port, integrates with CVA6's SV39 MMU for virtual address translation, and manages address generation for unit-strided, strided, and indexed access patterns.
+  </Card>
+  <Card title="Slide Unit — SLDU (sldu/sldu.sv)" icon="arrows-left-right">
+    Performs byte-level reshuffling and slide operations (`vslideup`, `vslidedown`, `vslide1up`, `vslide1down`, `vfslide1up`, `vfslide1down`). Also handles `vrgather` and `vcompress`. Connected all-to-all with every lane.
+  </Card>
+  <Card title="Mask Unit — MASKU (masku/masku.sv)" icon="filter">
+    Centralized logic for assembling and distributing predication mask bits. Executes bit-level mask operations (`vmand`, `vmor`, `vmxor`, etc.), population count (`vcpop.m`), first-set (`vfirst.m`), and permutation instructions. Shares scalar result lines with the sequencer.
+  </Card>
+</CardGroup>
+
+---
+
+## Data Flow
+
+Instructions travel through Ara in a well-defined pipeline:
+
+1. **CVA6 decode** — `cva6_accel_first_pass_decoder` combinatorially identifies vector instructions in the CVA6 front-end and marks which scalar registers are read or written.
+2. **Dispatcher** — `ara_dispatcher` receives the fully-decoded accelerator request (`accelerator_req_t`) from CVA6. It updates the vector CSRs (`vl`, `vtype`, `vstart`), expands the instruction into an `ara_req_t` descriptor (including operand EEWs, conversion flags, scalar operand values, and stride), and optionally injects reshuffle slide micro-ops before forwarding to the sequencer.
+3. **Sequencer** — `ara_sequencer` allocates a slot in the instruction window (up to `NrVInsn = 8` slots), assigns a `vid_t` token, resolves dependencies via the global hazard table, and broadcasts a `pe_req_t` to all processing elements simultaneously.
+4. **Execution** — Each lane's `lane_sequencer` accepts the `pe_req_t`, requests operands from the VRF via `operand_requester`, buffers them in `operand_queue`s, and feeds them to the appropriate functional unit (ALU, MFPU, or divider). Concurrently, the VLSU, SLDU, and MASKU each receive the same broadcast and begin their own execution if they are the target unit.
+5. **Writeback** — Results are written directly into the lane VRFs. The VLSU writes load data lane-by-lane via `ldu_result_*` ports; the SLDU writes slide results via `sldu_result_*`; the MASKU writes mask results via `masku_result_*`. Scalar results (e.g., from `vcpop.m`, `vfirst.m`, or `vmv.x.s`) are returned to the sequencer and then to CVA6 via `acc_resp_o`.
+
+---
+
+## Scalability
+
+Ara is designed to scale linearly with lane count:
+
+| Parameter | Value |
+|-----------|-------|
+| `NrLanes` | Power of two: 2, 4, 8, or 16 |
+| `MaxNrLanes` | 16 (maximum supported) |
+| `VLEN` | Typically `NrLanes × 1024` bits (1024 bits/lane) |
+| `MaxVLenPerLane` | `VLEN / NrLanes` bits |
+| `VRFSizePerLane` | `MaxVLenPerLane × 32` bits (32 vector registers) |
+| Peak throughput | `2 × NrLanes` 64-bit packets per cycle |
+
+Each 64-bit packet can hold one FP64/INT64 element, two FP32/INT32 elements, four FP16/INT16 elements, or eight INT8 elements, all processed in SIMD fashion. Multiply-accumulate instructions complete in a single cycle per FPU, so the peak figure of `2 × NrLanes` 64-bit packets/cycle is achievable in practice.
+
+---
+
+## AXI Interconnect
+
+Ara uses two separate AXI4 buses with different widths, both sharing the same address and ID widths:
+
+| Parameter | Value |
+|-----------|-------|
+| `AxiAddrWidth` | 64 bits |
+| `AxiIdWidth` | 6 bits |
+| `AxiNarrowDataWidth` | 64 bits (CVA6 scalar bus) |
+| `AxiWideDataWidth` | `64 × NrLanes / 2` bits (Ara vector bus) |
+
+The wide AXI bus is sized to match the aggregate lane bandwidth: with 8 lanes and 64-bit elements, the bus is 256 bits wide, matching the 4 × 64-bit words that can be transferred in a single cycle across all lanes.
+
+AXI channel types are fully parameterized (`ariane_axi_ar_t`, `ara_axi_ar_t`, `system_axi_ar_t`, etc.) and generated using the `axi/typedef.svh` macros, so the interconnect adapts cleanly to any downstream bus fabric.
+
+---
+
+## Performance Characteristics
+
+Ara has been implemented and characterized in TSMC 22nm FD-SOI technology:
+
+- Operates at **1 GHz+** clock frequency in 22nm FD-SOI
+- Peak throughput scales linearly: a 4-lane configuration delivers 8 × 64-bit FLOPS/cycle, an 8-lane configuration delivers 16 × 64-bit FLOPS/cycle
+- FPU latencies (from `ara_pkg.sv`): FP64 = 5 cycles, FP32 = 4 cycles, FP16 = 3 cycles
+- Integer multiplier latency: 1 cycle for EW64/32/16, 0 cycles for EW8
+
+<Note>
+Ara supports up to **`NrVInsn = 8`** vector instructions in flight simultaneously (defined in `ara_pkg.sv`). This pipeline depth is fixed at elaboration time and applies globally across all processing elements. The sequencer uses a leading-zero counter (`lzc`) to find a free slot and a per-PE running bitmap to track completion. When all 8 slots are occupied, the sequencer stalls the dispatcher until at least one instruction completes.
+</Note>
+
+---
+
+## Further Reading
+
+<CardGroup cols={3}>
+  <Card title="Vector Lanes" href="/architecture/lanes">
+    VRF layout, lane internals, operand flow, and functional unit details.
+  </Card>
+  <Card title="Functional Units" href="/architecture/functional-units">
+    Dispatcher, sequencer, SLDU, MASKU, and segment sequencer details.
+  </Card>
+  <Card title="Memory Interface" href="/architecture/memory-interface">
+    VLSU, AXI4 integration, MMU support, and supported memory operations.
+  </Card>
+</CardGroup>

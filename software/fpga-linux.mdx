@@ -1,0 +1,111 @@
+---
+title: "Ara on FPGA: Cheshire Integration and Linux Boot"
+description: "Implement Ara on Xilinx VCU128 or VCU118 using the Cheshire SoC flow, run bare-metal programs, or boot Linux with full RVV 1.0 vector extension support."
+---
+
+Ara supports the [Cheshire](https://github.com/pulp-platform/cheshire) FPGA flow and can be implemented on **Xilinx VCU128** and **Xilinx VCU118** boards in both bare-metal and Linux configurations. The tested configuration is 2 lanes (`ARA_CONFIGURATION=2_lanes`). The Cheshire flow handles FPGA synthesis, Linux image generation, SD card flashing, and bitstream programming.
+
+<Warning>
+  The FPGA flow requires **Xilinx Vivado** and valid board licenses for the
+  VCU128 or VCU118. Ensure your Vivado installation supports the target device
+  before proceeding.
+</Warning>
+
+## Cheshire SoC
+
+[Cheshire](https://github.com/pulp-platform/cheshire) is a lightweight, Linux-capable RISC-V SoC developed at ETH Zurich. It integrates a CVA6 application core with an L2 cache, UART, SPI, and other peripherals. Ara plugs in as a vector coprocessor, extending Cheshire's CVA6 core with RVV 1.0 capability.
+
+The Ara repository is structured as a submodule of Cheshire. The synthesis flow generates a custom Vivado TCL file with the correct Ara targets and lane configuration, copies it into the Cheshire directory, and then invokes the standard Cheshire compile flow. This means all FPGA and Linux targets are driven from the Ara repository without modifying Cheshire directly.
+
+For full details of the Cheshire SoC architecture and flow, refer to `cheshire/README.md` in the repository.
+
+## Supported boards
+
+| Board | Status |
+|---|---|
+| Xilinx VCU128 | Supported (primary target) |
+| Xilinx VCU118 | Supported |
+
+The tested lane configuration for FPGA is **2 lanes** (`ARA_CONFIGURATION=2_lanes`, VLEN=2048 bits). Larger configurations may not fit within the FPGA resource budget.
+
+## Bare-metal flow
+
+Ara can run bare-metal programs on the FPGA via JTAG injection (OpenOCD + GDB), following the standard Cheshire bare-metal flow.
+
+**Step 1 — Deploy Ara as a Cheshire submodule:**
+
+```bash
+git clone git@github.com:pulp-platform/cheshire.git
+cd cheshire
+git checkout ${CHS_HASH}
+bender checkout
+export ARA_ROOT=$(bender path ara)
+cd ${ARA_ROOT}
+```
+
+**Step 2 — Compile bare-metal programs:**
+
+```bash
+cd ${ARA_ROOT}/cheshire/sw
+make chs-sw-all
+```
+
+**Step 3 — Generate and program the FPGA bitstream:**
+
+```bash
+cd ${ARA_ROOT}/cheshire
+make ara-chs-xilinx
+make ara-chs-xilinx-program
+```
+
+Programs are then injected into the running FPGA via JTAG. For full instructions, refer to `cheshire/README.md` and [Cheshire's FPGA documentation](https://pulp-platform.github.io/cheshire/tg/xilinx).
+
+## Linux boot flow
+
+Ara supports booting Linux with RVV 1.0 enabled. The flow compiles RVV kernels for the Linux ABI, generates a Linux image using Buildroot, and boots it over the Cheshire SoC on the FPGA.
+
+**Step 1 — Compile RVV kernels for Linux:**
+
+```bash
+cd ${ARA_ROOT}/cheshire/sw
+
+# Build individual Linux kernels (uses buildroot GCC toolchain)
+kernel=fmatmul
+make ${kernel}-linux
+```
+
+Example kernels tested under Linux: `hello_world`, `fmatmul`, `fconv3d`, `jacobi2d`, `fdotproduct`.
+
+**Step 2 — Generate the Linux image:**
+
+```bash
+cd ${ARA_ROOT}/cheshire/sw
+make linux-img
+
+cd ${ARA_ROOT}/cheshire
+make ara-chs-image
+```
+
+**Step 3 — Flash the SD card and program the bitstream:**
+
+```bash
+cd ${ARA_ROOT}/cheshire
+make ara-chs-xilinx-flash
+make ara-chs-xilinx-program
+```
+
+**Optional: apply performance patches**
+
+Cheshire can be patched to increase main memory size, disable VGA, and configure the LLC as a cache (rather than scratchpad) under Linux. These patches are not required but improve performance:
+
+```bash
+make -C ${ARA_ROOT}/cheshire patch_cheshire_high_perf_hw
+make -C ${ARA_ROOT}/cheshire/sw patch_cheshire_high_perf_sw
+```
+
+<Note>
+  For the complete FPGA and Linux flow — including required environment
+  variables (`CHS_HASH`, `BOARD`, `CHS_XILINX_HWS_URL`,
+  `CHS_XILINX_HWS_PATH`), host toolchain requirements, and UART terminal
+  setup — refer to `cheshire/README.md` in the Ara repository.
+</Note>

@@ -1,0 +1,84 @@
+---
+title: "Ara Lane Configurations: 2, 4, 8, and 16 Lanes"
+description: "Predefined Ara configurations for 2, 4, 8, and 16 vector lanes, with VLEN settings, throughput characteristics, and instructions for selecting a configuration."
+---
+
+Ara ships four predefined configurations in the `config/` directory, each a Makefile fragment (`.mk` file) that sets `nr_lanes` and `vlen`. Every Makefile in the project includes `config/default.mk`, which by default points to the 4-lane configuration. Changing the active configuration rebuilds both the hardware and the software runtime to match.
+
+## Selecting a configuration
+
+You can select a configuration in two ways. The command-line method takes priority over the environment variable.
+
+**Method 1 — command-line prefix:**
+
+```bash
+config=4_lanes make <target>
+```
+
+**Method 2 — environment variable:**
+
+```bash
+export ARA_CONFIG=4_lanes
+make <target>
+```
+
+If neither is set, Ara falls back to `config/default.mk` (4 lanes, VLEN = 4096).
+
+## Configurations comparison
+
+| Config | `NrLanes` | VLEN (bits) | VLEN per lane (bits) | Max throughput (64-bit elements/cycle) | Typical use |
+|--------|-----------|-------------|----------------------|----------------------------------------|-------------|
+| `2_lanes` | 2 | 2048 | 1024 | 4 | Small area / fast simulation |
+| `4_lanes` | 4 | 4096 | 1024 | 8 | Default; balanced area-performance |
+| `8_lanes` | 8 | 8192 | 1024 | 16 | High performance |
+| `16_lanes` | 16 | 16384 | 1024 | 32 | Maximum throughput |
+
+All predefined configurations keep VLEN per lane constant at 1024 bits (128 bytes), which means each lane's vector register file scales linearly with `NrLanes`.
+
+## Configuration file format
+
+Each `.mk` file sets exactly two variables:
+
+```makefile
+# Number of vector lanes
+nr_lanes ?= 4
+
+# Length of each vector register (in bits)
+# Constraints: VLEN > 128
+vlen ?= 4096
+```
+
+The `?=` assignment means the values can still be overridden on the command line, but the file provides the defaults when none is given.
+
+## Customizing configurations
+
+To use a non-standard lane count or VLEN, edit the `.mk` file for the closest configuration, or create a new one modeled on the existing files. Two constraints apply:
+
+- `VLEN` must be greater than 128.
+- `NrLanes` must be a power of 2 and no greater than 16 (the hardware maximum, `MaxNrLanes`, is hardcoded to 16 in `ara_pkg.sv`).
+
+When you change `nr_lanes` or `vlen`, the Makefile system regenerates the software runtime headers and hardware parameter files automatically on the next build. You must run `make clean` first so stale artifacts from the previous configuration are removed.
+
+<Warning>
+Always run `make clean` after changing `nr_lanes` or `vlen`. Mixing build artifacts from different configurations will produce incorrect simulation results or synthesis failures.
+</Warning>
+
+<Tip>
+Use the `2_lanes` configuration during development and debugging. It has the smallest register file and fewest parallel datapaths, which significantly reduces RTL simulation time. Switch to a larger configuration only when you need to validate lane-scaling behavior or measure performance.
+</Tip>
+
+## Git workflow for custom configurations
+
+Editing `config/default.mk` to a non-default configuration marks the file as modified in git, which can clutter `git status` output during long development sessions. To suppress tracking of local changes to this file without affecting other files, run:
+
+```bash
+git update-index --assume-unchanged config/default.mk
+```
+
+When you are ready to commit a deliberate change to the default configuration, re-enable tracking with:
+
+```bash
+git update-index --no-assume-unchanged config/default.mk
+```
+
+This approach keeps your working tree clean while you iterate on a non-default lane count, and lets you opt back in to committing the change when it is intentional.

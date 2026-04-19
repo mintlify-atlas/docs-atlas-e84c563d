@@ -1,0 +1,51 @@
+---
+title: "Ideal Dispatcher Mode: Isolated Vector Performance Analysis"
+description: "Run Ara in Ideal Dispatcher mode, replacing CVA6 with a maximum-rate FIFO to measure pure vector unit performance without scalar core overhead."
+---
+
+Ideal Dispatcher mode replaces the CVA6 scalar core with a simplified instruction source that dispatches vector instructions to Ara at the maximum possible issue rate. Because CVA6 is removed from the critical path, only Ara and its memory system influence the measured performance—making this mode ideal for isolating and characterizing pure vector throughput.
+
+## How it works
+
+In normal operation, vector instruction dispatch rate is bounded by CVA6's fetch, decode, and issue pipeline. Ideal Dispatcher substitutes CVA6 with `accel_dispatcher_ideal.sv`, a simple FIFO that replays a pre-recorded vector instruction trace at the fastest rate Ara can accept.
+
+The vector trace is generated during application compilation (as a `.vtrace` file) and embedded into the simulation at elaboration time. During the simulation run, only Ara's lanes, the vector register file, and the memory subsystem contribute to the measured cycle count.
+
+## Limitations
+
+<Warning>
+Ideal Dispatcher mode has several important constraints. Make sure your program meets these requirements before using this flow:
+
+- **Fire-and-forget programs only.** There must be no runtime dependencies from the vector code back to the scalar code. The dispatcher cannot stall waiting for a scalar result.
+- **Not all instructions are supported.** Instructions that use the `rs2` scalar register (i.e., those that read a GPR operand) cannot be replayed by the FIFO and are not supported.
+- **No CVA6–Ara interactions.** The simple FIFO cannot model complex control-flow interactions between CVA6 and Ara, such as load/store ordering with scalar memory operations.
+</Warning>
+
+## Using ideal dispatcher
+
+<Steps>
+  <Step title="Compile the program with the ideal flag">
+    Build the application to produce both the Spike binary and the vector instruction trace:
+
+    ```bash
+    cd apps
+    make bin/${program}.ideal
+    ```
+
+    This generates `apps/bin/${program}.ideal` (the L2 memory image) and `apps/ideal_dispatcher/vtrace/${program}.vtrace` (the instruction replay trace).
+  </Step>
+  <Step title="Run the simulation in Ideal Dispatcher mode">
+    From the `hardware` directory, launch the simulation with `ideal_dispatcher=1`:
+
+    ```bash
+    cd hardware
+    make sim app=${program} ideal_dispatcher=1
+    ```
+
+    The simulator reads the `.vtrace` file and drives Ara directly, bypassing CVA6.
+  </Step>
+</Steps>
+
+<Tip>
+Use Ideal Dispatcher mode early in the architecture exploration process. Because CVA6 overhead is eliminated, cycle counts directly reflect Ara's microarchitectural efficiency for a given kernel. This makes it straightforward to compare lane configurations or memory system changes before running the more time-consuming full-system simulation.
+</Tip>

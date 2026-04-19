@@ -1,0 +1,151 @@
+---
+title: "Building and Running Ara Applications"
+description: "Compile C and assembly applications for Ara using the RISC-V LLVM toolchain, run them in Spike or RTL simulation, and execute RISC-V vector unit tests."
+---
+
+The `apps/` folder contains example applications, benchmarks, and tests ready to run on Ara. Applications are written in C (or C++) and compiled with the RISC-V LLVM toolchain targeting the RVV 1.0 vector extension. Each application lives in its own subdirectory and includes a `main.c` entry point, optional kernel implementations, and a data-generation script.
+
+## Build an application
+
+From the repository root, change into the `apps` directory and invoke `make` with the binary target:
+
+```bash
+cd apps
+make bin/hello_world
+```
+
+The Makefile discovers all `main.c` files automatically, so the same pattern works for every application:
+
+```bash
+make bin/fmatmul
+make bin/fft
+make bin/softmax
+```
+
+To select a different lane configuration (e.g. 2 lanes for faster iteration), prepend `config=2_lanes`:
+
+```bash
+config=2_lanes make bin/hello_world
+```
+
+<Tip>
+  Use `config=2_lanes` during development to keep simulation times short. Switch
+  to the target configuration (e.g. `config=4_lanes`) when running final
+  benchmarks.
+</Tip>
+
+## Run with Spike
+
+[Spike](https://github.com/riscv-software-src/riscv-isa-sim) provides fast functional simulation. Build the Spike binary and run it in two steps:
+
+```bash
+cd apps
+make bin/hello_world.spike
+make spike-run-hello_world
+```
+
+Spike is invoked with `--isa=rv64gcv_zfh --varch="vlen:<VLEN>,elen:64"` automatically derived from the active configuration. Simulation output is saved to `spike_runs/`.
+
+## Run RTL simulation
+
+After building an application, simulate it against the RTL model using Verilator:
+
+```bash
+cd ../hardware
+app=hello_world make simv
+```
+
+Use `make sim` (ModelSim) or `make simc` (ModelSim without GUI) if you have a commercial simulator available:
+
+```bash
+# ModelSim with GUI
+app=hello_world make sim
+
+# ModelSim without GUI
+app=hello_world make simc
+```
+
+## RISC-V vector unit tests
+
+The `apps/riscv-tests/` submodule includes unit tests for scalar CVA6 extensions and RVV vector instructions.
+
+Build all unit tests:
+
+```bash
+cd apps
+make riscv_tests
+```
+
+Run them through the Verilator RTL model:
+
+```bash
+cd ../hardware
+make riscv_tests_simv
+```
+
+CVA6 scalar tests (`rv64ui`, `rv64uc`, `rv64um`, `rv64uf`, `rv64ud`, `rv64si`) are compiled with GCC. Ara vector tests (`rv64uv`) are compiled with LLVM.
+
+## Available applications
+
+<CardGroup cols={2}>
+  <Card title="hello_world" icon="hand-wave">
+    Basic sanity check — prints a greeting from the CVA6 core. The simplest
+    starting point for verifying your toolchain and simulation setup.
+  </Card>
+  <Card title="fmatmul" icon="table">
+    Floating-point matrix multiplication (double precision). Uses tiled
+    `vsetvli`/`vfmacc.vf` inner loops with LMUL=1, 2, or 4 depending on matrix
+    size.
+  </Card>
+  <Card title="imatmul" icon="table">
+    Integer matrix multiplication. Same tiled structure as `fmatmul` but
+    operates on integer element widths.
+  </Card>
+  <Card title="fconv3d / iconv2d" icon="grid-2">
+    3D floating-point and 2D integer convolution. Output matrix size and filter
+    size are configurable via `OUT_MTX_SIZE` and `F_SIZE` (3, 5, or 7).
+  </Card>
+  <Card title="fft" icon="wave-sine">
+    Fast Fourier Transform. Number of samples is set via `FFT_SAMPLES` at
+    compile time.
+  </Card>
+  <Card title="dotproduct / fdotproduct" icon="arrow-right-arrow-left">
+    Integer and floating-point dot product kernels for measuring reduction
+    throughput.
+  </Card>
+  <Card title="gemv" icon="rectangle">
+    General matrix-vector multiply — useful for profiling memory-bound vector
+    throughput.
+  </Card>
+  <Card title="softmax" icon="sigma">
+    Softmax activation function, representative of inference workloads.
+  </Card>
+  <Card title="dropout" icon="filter">
+    Dropout layer implementation, supports VCD dumping for power analysis.
+  </Card>
+  <Card title="dwt" icon="wave-triangle">
+    Discrete Wavelet Transform. Supports VCD dumping for activity-based power
+    analysis.
+  </Card>
+  <Card title="exp / log / cos" icon="function">
+    Transcendental math functions vectorised over floating-point arrays.
+    All three support VCD dumping.
+  </Card>
+  <Card title="jacobi2d" icon="border-all">
+    Jacobi 2D stencil computation — a classic iterative PDE benchmark.
+    Supports VCD dumping.
+  </Card>
+  <Card title="pathfinder" icon="route">
+    Dynamic programming benchmark from the Rodinia suite.
+  </Card>
+  <Card title="spmv" icon="table-cells-large">
+    Sparse matrix-vector multiply, useful for evaluating irregular memory
+    access patterns.
+  </Card>
+  <Card title="roi_align" icon="crop">
+    Region-of-interest alignment for computer vision inference pipelines.
+  </Card>
+  <Card title="lavamd" icon="atom">
+    N-body particle simulation from the Rodinia benchmark suite.
+  </Card>
+</CardGroup>
